@@ -1,0 +1,42 @@
+# ClaimWise configuration — single source of truth for all runtime settings.
+# Never hardcode paths, model names, or thresholds in scripts (CLAUDE.md §8).
+# Secrets live in .env, never here.
+
+project:
+  name: claimwise
+  seed: 42
+
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  eval_dir: data/eval
+  logs_dir: logs
+
+ingest:
+  # "text"   = plain reading-order extraction (Phase 1 baseline)
+  # "blocks" = positioned blocks sorted top-to-bottom, left-to-right
+  # Phase 2 flips this and re-evaluates so the delta is attributable.
+  extraction_mode: text
+
+  # Pages with fewer characters than this after cleaning are dropped as
+  # blank/cover/divider pages. They add noise to the index and never answer
+  # a question. Skipped pages are logged, never dropped silently.
+  min_chars_per_page: 40
+
+  # Repeated header/footer removal. Policy PDFs stamp the insurer name, UIN,
+  # and "Page 12 of 88" on every page; left in, that boilerplate dominates the
+  # embedding of every short chunk and flattens retrieval.
+  strip_repeated_lines: true
+  # A line must appear on this fraction of pages to count as boilerplate.
+  repeated_line_threshold: 0.6
+  # Only the first/last N lines of a page are candidates — body text that
+  # happens to repeat is left alone.
+  repeated_line_edge_lines: 3
+
+  # Rejoin words split across a line break ("hospi-\ntalisation").
+  dehyphenate: true
+  # NFKC normalisation: collapses ligatures and exotic spaces so that a query
+  # embedding and a chunk embedding see the same characters.
+  normalize_unicode: true
+
+  output_filename: pages.jsonl

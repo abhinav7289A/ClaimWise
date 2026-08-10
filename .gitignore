@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Secrets — never commit
+.env
+
+# Data: raw policy PDFs and derived artifacts are never committed.
+# data/eval/ IS tracked — the golden eval set is versioned (CLAUDE.md §5).
+data/raw/
+data/processed/
+
+# Run logs
+logs/
+
+# Vector store
+qdrant_storage/
+.qdrant/
+
+# Model artifacts
+models/
+outputs/
+checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db

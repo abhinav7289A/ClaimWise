@@ -1,0 +1,25 @@
+[project]
+name = "claimwise"
+version = "0.1.0"
+description = "Agentic health insurance policy & claims assistant"
+requires-python = ">=3.11,<3.12"
+
+# Phase 1 file 1-2 dependencies only. Retrieval deps (sentence-transformers,
+# qdrant-client, langchain) land at embed_index.py so we don't download ~2GB of
+# torch before a single PDF has been parsed.
+dependencies = [
+    # PyMuPDF: fastest pure-Python PDF text extractor with per-page access and
+    # block coordinates. pdfplumber is more accurate on tables but ~10x slower;
+    # pypdf loses layout entirely. CLAUDE.md fixes this choice.
+    "pymupdf>=1.24",
+    # PyYAML: config.yaml parsing. Standard, no alternative worth the argument.
+    "pyyaml>=6.0",
+    # tqdm: progress bars for multi-document ingestion runs.
+    "tqdm>=4.66",
+]
+
+[tool.uv]
+# Virtual project: uv manages .venv and dependencies but does not build/install
+# claimwise itself. Scripts run from the repo root via `python -m <package>.<mod>`,
+# so new phase packages need no pyproject edit to become importable.
+package = false

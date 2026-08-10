@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="stylesheet" href="_ds/industry-ae84661e-5078-4478-8e3f-3a1e52cc6413/styles.css">
+<script src="_ds/industry-ae84661e-5078-4478-8e3f-3a1e52cc6413/_ds_bundle.js"></script>
+<style>
+:root { --wise:#5980a6; }
+.wise { stroke: var(--wise); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.wise .fill { fill: var(--wise); stroke: none; }
+.artlabel { display:flex; align-items:baseline; gap:12px; font-family:"Barlow Condensed",sans-serif; }
+.artlabel .n { font-size:13px; letter-spacing:.12em; color:#5980a6; }
+.artlabel .t { font-size:22px; font-weight:600; letter-spacing:-.01em; }
+.artlabel .d { font-size:13px; font-family:"Barlow",sans-serif; color:color-mix(in srgb,#1d1f20 50%,transparent); }
+.dot-pulse { animation: dotp 1.4s ease-in-out infinite; }
+.dot-pulse:nth-child(2){ animation-delay:.2s } .dot-pulse:nth-child(3){ animation-delay:.4s }
+@keyframes dotp { 0%,60%,100%{ opacity:.25; transform:translateY(0) } 30%{ opacity:1; transform:translateY(-3px) } }
+.wchip { display:inline-flex; align-items:center; gap:7px; font-family:"Barlow Condensed",sans-serif; font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
+</style>
+</helmet>
+
+<div style="min-height:100%; background:#dcdce0; padding:56px; font-family:'Barlow',system-ui,sans-serif; color:#1d1f20;">
+
+  <div style="display:flex; align-items:center; gap:18px; margin-bottom:44px;">
+    <svg viewBox="0 0 120 130" width="52" height="56" class="wise" style="--wise:#416180"><line x1="60" y1="6" x2="60" y2="22"/><circle class="fill" cx="60" cy="6" r="4.5"/><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/><rect x="31" y="92" width="58" height="30" rx="12"/><line x1="20" y1="102" x2="31" y2="102"/><line x1="89" y1="102" x2="100" y2="102"/></svg>
+    <div>
+      <div style="font-family:'Barlow Condensed',sans-serif; font-size:34px; font-weight:600; letter-spacing:-.02em; line-height:1;">ClaimWise</div>
+      <div style="font-size:14px; color:color-mix(in srgb,#1d1f20 55%,transparent); margin-top:4px;">Interface design · steel wireframe system · light &amp; dark</div>
+    </div>
+  </div>
+
+  <div style="display:flex; flex-wrap:wrap; gap:64px; align-items:flex-start;">
+
+    <!-- 1 · LANDING -->
+    <div style="display:flex; flex-direction:column; gap:14px;">
+      <div class="artlabel"><span class="n">01</span><span class="t">Landing</span><span class="d">first-touch marketing page</span></div>
+      <div class="blueprint" style="width:1180px; background:#f2f2f3; padding:0;">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <div class="nav" style="border-bottom:1px solid var(--color-divider);">
+          <span class="nav-brand" style="display:flex; align-items:center; gap:9px;">
+            <svg viewBox="0 0 120 130" width="22" height="24" class="wise" style="--wise:#416180"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+            ClaimWise</span>
+          <a href="#" aria-current="page">Product</a><a href="#">How it works</a><a href="#">Pricing</a><a href="#">Support</a>
+          <a href="#" class="btn btn-secondary" style="margin-left:8px;">Sign in</a>
+          <a href="#" class="btn btn-primary">Start a claim</a>
+        </div>
+        <div style="display:grid; grid-template-columns:1.05fr .95fr; gap:40px; padding:56px 48px 40px; align-items:center;">
+          <div>
+            <span class="tag tag-outline">AI claims assistant</span>
+            <h1 style="font-size:58px; line-height:1.02; margin:18px 0 0; letter-spacing:-.02em;">File your insurance<br>claim by just<br>talking to Wise.</h1>
+            <p style="font-size:17px; max-width:430px; margin:20px 0 0; color:color-mix(in srgb,#1d1f20 68%,transparent);">No forms, no jargon, no hold music. Describe what happened in plain words and ClaimWise builds, checks and submits the paperwork with you.</p>
+            <div style="display:flex; gap:12px; margin-top:28px;">
+              <a href="#" class="btn btn-primary" style="padding:12px 22px; font-size:15px;">Start a claim →</a>
+              <a href="#" class="btn btn-secondary" style="padding:12px 22px; font-size:15px;">Watch the 90-sec demo</a>
+            </div>
+            <div style="display:flex; gap:26px; margin-top:34px; font-size:13px; color:color-mix(in srgb,#1d1f20 55%,transparent);">
+              <span>◇ Avg. claim in 6 min</span><span>◇ 24/7 · no queues</span><span>◇ SOC-2 secure</span>
+            </div>
+          </div>
+          <div class="blueprint duotone" style="background:#e9e9ea; aspect-ratio:5/4; display:grid; place-items:center;">
+            <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+            <svg viewBox="0 0 120 130" width="230" height="250" class="wise" style="--wise:#416180"><line x1="60" y1="4" x2="60" y2="22"/><circle class="fill" cx="60" cy="4" r="5"/><rect x="18" y="22" width="84" height="64" rx="24"/><circle class="fill" cx="44" cy="53" r="6.5"/><circle class="fill" cx="76" cy="53" r="6.5"/><path d="M48 69 q12 10 24 0"/><rect x="30" y="94" width="60" height="30" rx="13"/><line x1="18" y1="104" x2="30" y2="104"/><line x1="90" y1="104" x2="102" y2="104"/></svg>
+          </div>
+        </div>
+        <!-- spec-sheet plate -->
+        <div style="border-top:1px solid var(--color-divider); display:grid; grid-template-columns:repeat(3,1fr);">
+          <div style="padding:28px 30px; border-right:1px solid var(--color-divider);">
+            <div style="font-family:'Barlow Condensed',sans-serif; font-size:34px; color:#5980a6; line-height:1;">01</div>
+            <h4 style="margin:12px 0 6px;">Describe it</h4>
+            <p style="font-size:14px; margin:0; color:color-mix(in srgb,#1d1f20 65%,transparent);">Tell Wise what happened. Photos, dates, damages — however you have them.</p>
+          </div>
+          <div style="padding:28px 30px; border-right:1px solid var(--color-divider);">
+            <div style="font-family:'Barlow Condensed',sans-serif; font-size:34px; color:#5980a6; line-height:1;">02</div>
+            <h4 style="margin:12px 0 6px;">Wise assembles</h4>
+            <p style="font-size:14px; margin:0; color:color-mix(in srgb,#1d1f20 65%,transparent);">It maps your words to the right forms, flags gaps and drafts the submission.</p>
+          </div>
+          <div style="padding:28px 30px;">
+            <div style="font-family:'Barlow Condensed',sans-serif; font-size:34px; color:#5980a6; line-height:1;">03</div>
+            <h4 style="margin:12px 0 6px;">Review &amp; send</h4>
+            <p style="font-size:14px; margin:0; color:color-mix(in srgb,#1d1f20 65%,transparent);">Check the summary, approve, and track the claim to payout from one thread.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 2 · CHAT (light) -->
+    <div style="display:flex; flex-direction:column; gap:14px;">
+      <div class="artlabel"><span class="n">02</span><span class="t">Chat</span><span class="d">core conversation · light</span></div>
+      <div class="blueprint" style="width:1080px; height:720px; background:#f2f2f3; display:grid; grid-template-columns:280px 1fr; overflow:hidden;">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <!-- sidebar -->
+        <aside style="border-right:1px solid var(--color-divider); display:flex; flex-direction:column; background:#ededee;">
+          <div style="padding:16px; display:flex; align-items:center; gap:9px; border-bottom:1px solid var(--color-divider);">
+            <svg viewBox="0 0 120 130" width="20" height="22" class="wise" style="--wise:#416180"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+            <span style="font-family:'Barlow Condensed',sans-serif; font-size:17px; font-weight:600;">ClaimWise</span>
+          </div>
+          <div style="padding:14px 14px 8px;"><a href="#" class="btn btn-primary btn-block" style="margin:0;">+ New claim</a></div>
+          <div style="padding:14px 14px 6px; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:color-mix(in srgb,#1d1f20 45%,transparent);">Recent</div>
+          <nav style="display:flex; flex-direction:column; padding:0 8px; gap:2px; overflow-y:auto;">
+            <a href="#" style="padding:10px 12px; text-decoration:none; color:inherit; border-left:2px solid #5980a6; background:color-mix(in srgb,#5980a6 12%,transparent); font-size:14px;">Kitchen water damage<br><span style="font-size:11px; color:color-mix(in srgb,#1d1f20 50%,transparent);">Active · #CW-4821</span></a>
+            <a href="#" style="padding:10px 12px; text-decoration:none; color:inherit; border-left:2px solid transparent; font-size:14px;">Windshield crack<br><span style="font-size:11px; color:color-mix(in srgb,#1d1f20 50%,transparent);">Submitted · 2d ago</span></a>
+            <a href="#" style="padding:10px 12px; text-decoration:none; color:inherit; border-left:2px solid transparent; font-size:14px;">Lost luggage — Lisbon<br><span style="font-size:11px; color:color-mix(in srgb,#1d1f20 50%,transparent);">Paid out · Jun 3</span></a>
+            <a href="#" style="padding:10px 12px; text-decoration:none; color:inherit; border-left:2px solid transparent; font-size:14px;">Bike theft claim<br><span style="font-size:11px; color:color-mix(in srgb,#1d1f20 50%,transparent);">Draft</span></a>
+          </nav>
+          <div style="margin-top:auto; padding:14px; border-top:1px solid var(--color-divider); display:flex; align-items:center; gap:10px; font-size:13px;">
+            <div style="width:28px; height:28px; border:1px solid var(--color-divider); display:grid; place-items:center; font-family:'Barlow Condensed',sans-serif;">DA</div>
+            Dana Alvarez<span style="margin-left:auto; color:color-mix(in srgb,#1d1f20 45%,transparent);">⚙</span>
+          </div>
+        </aside>
+        <!-- conversation -->
+        <section style="display:flex; flex-direction:column; min-width:0;">
+          <header style="padding:14px 22px; border-bottom:1px solid var(--color-divider); display:flex; align-items:center; gap:12px;">
+            <div><div style="font-family:'Barlow Condensed',sans-serif; font-size:18px; font-weight:600;">Kitchen water damage</div><div style="font-size:12px; color:color-mix(in srgb,#1d1f20 50%,transparent);">Claim #CW-4821 · Homeowners</div></div>
+            <span class="tag tag-accent" style="margin-left:auto;">◐ In progress · 60%</span>
+          </header>
+          <div style="flex:1; overflow-y:auto; padding:26px 22px; display:flex; flex-direction:column; gap:20px;">
+            <!-- bot -->
+            <div style="display:flex; gap:12px; max-width:78%;">
+              <svg viewBox="0 0 120 130" width="30" height="32" class="wise" style="--wise:#416180; flex:none; margin-top:2px;"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+              <div class="blueprint" style="background:#e9e9ea; padding:14px 16px;"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+                <span style="font-size:15px;">Hi Dana — I'm Wise. Let's file your kitchen water-damage claim. First, when did you notice the damage?</span></div>
+            </div>
+            <!-- user -->
+            <div style="display:flex; justify-content:flex-end;">
+              <div style="background:#5980a6; color:#f2f2f3; padding:14px 16px; max-width:70%; font-size:15px;">Sunday morning, about 8am. The dishwasher hose burst overnight.</div>
+            </div>
+            <!-- bot with card -->
+            <div style="display:flex; gap:12px; max-width:82%;">
+              <svg viewBox="0 0 120 130" width="30" height="32" class="wise" style="--wise:#416180; flex:none; margin-top:2px;"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+              <div style="display:flex; flex-direction:column; gap:10px;">
+                <div class="blueprint" style="background:#e9e9ea; padding:14px 16px;"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+                  <span style="font-size:15px;">Got it. I've started your form — here's what I have so far. Can you add a photo of the affected area?</span></div>
+                <div class="blueprint" style="background:#f2f2f3; padding:14px 16px; width:340px;"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+                  <div style="font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:#5980a6; margin-bottom:8px;">Claim summary — auto-drafted</div>
+                  <div style="display:flex; justify-content:space-between; font-size:13px; padding:4px 0; border-bottom:1px solid var(--color-divider);"><span style="color:color-mix(in srgb,#1d1f20 55%,transparent);">Incident date</span><span>Sun, Aug 3 · ~8:00am</span></div>
+                  <div style="display:flex; justify-content:space-between; font-size:13px; padding:4px 0; border-bottom:1px solid var(--color-divider);"><span style="color:color-mix(in srgb,#1d1f20 55%,transparent);">Cause</span><span>Burst dishwasher hose</span></div>
+                  <div style="display:flex; justify-content:space-between; font-size:13px; padding:4px 0;"><span style="color:color-mix(in srgb,#1d1f20 55%,transparent);">Est. damage</span><span style="color:#5980a6;">Needs photo</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- composer -->
+          <div style="padding:14px 22px 18px; border-top:1px solid var(--color-divider);">
+            <div class="blueprint" style="background:#e9e9ea; display:flex; align-items:center; gap:10px; padding:8px 8px 8px 14px;"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+              <span style="color:color-mix(in srgb,#1d1f20 40%,transparent); font-size:12px;">📎</span>
+              <span style="flex:1; font-size:15px; color:color-mix(in srgb,#1d1f20 42%,transparent);">Message Wise…</span>
+              <button class="btn btn-primary" style="padding:8px 16px;">Send ↑</button>
+            </div>
+            <div style="font-size:11px; color:color-mix(in srgb,#1d1f20 42%,transparent); margin-top:8px; text-align:center;">Wise can make mistakes. Review your claim summary before submitting.</div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- 3 · CHAT (dark) -->
+    <div style="display:flex; flex-direction:column; gap:14px;">
+      <div class="artlabel"><span class="n">03</span><span class="t">Chat</span><span class="d">core conversation · dark</span></div>
+      <div class="blueprint" style="width:1080px; height:720px; background:#131a24; color:#e7edf3; display:grid; grid-template-columns:280px 1fr; overflow:hidden; --color-divider:rgba(255,255,255,.14);">
+        <i class="corner tl" style="color:rgba(255,255,255,.5)"></i><i class="corner tr" style="color:rgba(255,255,255,.5)"></i><i class="corner bl" style="color:rgba(255,255,255,.5)"></i><i class="corner br" style="color:rgba(255,255,255,.5)"></i>
+        <aside style="border-right:1px solid rgba(255,255,255,.14); display:flex; flex-direction:column; background:#0f151d;">
+          <div style="padding:16px; display:flex; align-items:center; gap:9px; border-bottom:1px solid rgba(255,255,255,.14);">
+            <svg viewBox="0 0 120 130" width="20" height="22" class="wise" style="--wise:#8fb2d6"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+            <span style="font-family:'Barlow Condensed',sans-serif; font-size:17px; font-weight:600;">ClaimWise</span>
+          </div>
+          <div style="padding:14px 14px 8px;"><a href="#" class="btn btn-block" style="margin:0; background:#749dc4; color:#0f151d; border-color:#749dc4;">+ New claim</a></div>
+          <div style="padding:14px 14px 6px; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:rgba(231,237,243,.45);">Recent</div>
+          <nav style="display:flex; flex-direction:column; padding:0 8px; gap:2px;">
+            <a href="#" style="padding:10px 12px; text-decoration:none; color:inherit; border-left:2px solid #749dc4; background:rgba(116,157,196,.16); font-size:14px;">Kitchen water damage<br><span style="font-size:11px; color:rgba(231,237,243,.5);">Active · #CW-4821</span></a>
+            <a href="#" style="padding:10px 12px; text-decoration:none; color:inherit; border-left:2px solid transparent; font-size:14px;">Windshield crack<br><span style="font-size:11px; color:rgba(231,237,243,.5);">Submitted · 2d ago</span></a>
+            <a href="#" style="padding:10px 12px; text-decoration:none; color:inherit; border-left:2px solid transparent; font-size:14px;">Lost luggage — Lisbon<br><span style="font-size:11px; color:rgba(231,237,243,.5);">Paid out · Jun 3</span></a>
+          </nav>
+          <div style="margin-top:auto; padding:14px; border-top:1px solid rgba(255,255,255,.14); display:flex; align-items:center; gap:10px; font-size:13px;">
+            <div style="width:28px; height:28px; border:1px solid rgba(255,255,255,.2); display:grid; place-items:center; font-family:'Barlow Condensed',sans-serif;">DA</div>
+            Dana Alvarez<span style="margin-left:auto; color:rgba(231,237,243,.45);">⚙</span>
+          </div>
+        </aside>
+        <section style="display:flex; flex-direction:column; min-width:0;">
+          <header style="padding:14px 22px; border-bottom:1px solid rgba(255,255,255,.14); display:flex; align-items:center; gap:12px;">
+            <div><div style="font-family:'Barlow Condensed',sans-serif; font-size:18px; font-weight:600;">Kitchen water damage</div><div style="font-size:12px; color:rgba(231,237,243,.5);">Claim #CW-4821 · Homeowners</div></div>
+            <span class="tag" style="margin-left:auto; background:rgba(116,157,196,.2); color:#b7d2ec;">◐ In progress · 60%</span>
+          </header>
+          <div style="flex:1; overflow-y:auto; padding:26px 22px; display:flex; flex-direction:column; gap:20px;">
+            <div style="display:flex; gap:12px; max-width:78%;">
+              <svg viewBox="0 0 120 130" width="30" height="32" class="wise" style="--wise:#8fb2d6; flex:none; margin-top:2px;"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+              <div class="blueprint" style="background:#1b242f; padding:14px 16px; border-color:rgba(255,255,255,.14);"><i class="corner tl" style="color:rgba(255,255,255,.5)"></i><i class="corner tr" style="color:rgba(255,255,255,.5)"></i><i class="corner bl" style="color:rgba(255,255,255,.5)"></i><i class="corner br" style="color:rgba(255,255,255,.5)"></i>
+                <span style="font-size:15px;">Thanks — I've added the photo. The damage looks consistent with a burst hose. Want me to estimate the repair cost from the image?</span></div>
+            </div>
+            <div style="display:flex; justify-content:flex-end;">
+              <div style="background:#749dc4; color:#0f151d; padding:14px 16px; max-width:70%; font-size:15px;">Yes please, and check if my policy covers appliances.</div>
+            </div>
+            <!-- typing indicator -->
+            <div style="display:flex; gap:12px; align-items:center;">
+              <svg viewBox="0 0 120 130" width="30" height="32" class="wise" style="--wise:#8fb2d6; flex:none;"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><line x1="50" y1="70" x2="70" y2="70"/></svg>
+              <div class="blueprint" style="background:#1b242f; padding:14px 18px; border-color:rgba(255,255,255,.14); display:flex; gap:6px; align-items:center;"><i class="corner tl" style="color:rgba(255,255,255,.5)"></i><i class="corner tr" style="color:rgba(255,255,255,.5)"></i><i class="corner bl" style="color:rgba(255,255,255,.5)"></i><i class="corner br" style="color:rgba(255,255,255,.5)"></i>
+                <span class="dot-pulse" style="width:7px; height:7px; border-radius:50%; background:#8fb2d6; display:block;"></span>
+                <span class="dot-pulse" style="width:7px; height:7px; border-radius:50%; background:#8fb2d6; display:block;"></span>
+                <span class="dot-pulse" style="width:7px; height:7px; border-radius:50%; background:#8fb2d6; display:block;"></span>
+              </div>
+            </div>
+          </div>
+          <div style="padding:14px 22px 18px; border-top:1px solid rgba(255,255,255,.14);">
+            <div class="blueprint" style="background:#1b242f; display:flex; align-items:center; gap:10px; padding:8px 8px 8px 14px; border-color:rgba(255,255,255,.14);"><i class="corner tl" style="color:rgba(255,255,255,.5)"></i><i class="corner tr" style="color:rgba(255,255,255,.5)"></i><i class="corner bl" style="color:rgba(255,255,255,.5)"></i><i class="corner br" style="color:rgba(255,255,255,.5)"></i>
+              <span style="color:rgba(231,237,243,.4); font-size:12px;">📎</span>
+              <span style="flex:1; font-size:15px; color:rgba(231,237,243,.42);">Message Wise…</span>
+              <button class="btn" style="padding:8px 16px; background:#749dc4; color:#0f151d; border-color:#749dc4;">Send ↑</button>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- 4 · MASCOT LOADER STATES -->
+    <div style="display:flex; flex-direction:column; gap:14px;">
+      <div class="artlabel"><span class="n">04</span><span class="t">Wise — states</span><span class="d">mascot / loader across the flow</span></div>
+      <div class="blueprint" style="width:1080px; background:#f2f2f3; padding:40px; display:grid; grid-template-columns:repeat(4,1fr); gap:0;">
+        <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+        <!-- idle -->
+        <div style="padding:16px 24px; border-right:1px solid var(--color-divider); text-align:center;">
+          <svg viewBox="0 0 120 130" width="120" height="130" class="wise" style="--wise:#416180; margin:0 auto;"><line x1="60" y1="4" x2="60" y2="22"/><circle class="fill" cx="60" cy="4" r="5"/><rect x="18" y="22" width="84" height="64" rx="24"/><circle class="fill" cx="44" cy="53" r="6.5"/><circle class="fill" cx="76" cy="53" r="6.5"/><path d="M48 69 q12 10 24 0"/><rect x="30" y="94" width="60" height="30" rx="13"/><line x1="18" y1="104" x2="30" y2="104"/><line x1="90" y1="104" x2="102" y2="104"/></svg>
+          <div class="wchip" style="color:#416180; justify-content:center; margin-top:8px;">● Idle</div>
+          <p style="font-size:12px; color:color-mix(in srgb,#1d1f20 55%,transparent); margin:6px 0 0;">Ready and waiting for you.</p>
+        </div>
+        <!-- thinking -->
+        <div style="padding:16px 24px; border-right:1px solid var(--color-divider); text-align:center;">
+          <svg viewBox="0 0 120 130" width="120" height="130" class="wise" style="--wise:#416180; margin:0 auto;"><circle cx="92" cy="14" r="3" class="fill" opacity=".4"/><circle cx="101" cy="7" r="4.5" class="fill" opacity=".7"/><line x1="60" y1="4" x2="60" y2="22"/><circle class="fill" cx="60" cy="4" r="5"/><rect x="18" y="22" width="84" height="64" rx="24"/><circle class="fill" cx="48" cy="50" r="4"/><circle class="fill" cx="80" cy="50" r="4"/><line x1="50" y1="70" x2="70" y2="70"/><rect x="30" y="94" width="60" height="30" rx="13"/><line x1="18" y1="104" x2="30" y2="104"/><line x1="90" y1="104" x2="102" y2="104"/></svg>
+          <div class="wchip" style="color:#416180; justify-content:center; margin-top:8px;">◐ Thinking</div>
+          <p style="font-size:12px; color:color-mix(in srgb,#1d1f20 55%,transparent); margin:6px 0 0;">Mapping your words to forms.</p>
+        </div>
+        <!-- success -->
+        <div style="padding:16px 24px; border-right:1px solid var(--color-divider); text-align:center;">
+          <svg viewBox="0 0 120 130" width="120" height="130" class="wise" style="--wise:#416180; margin:0 auto;"><line x1="60" y1="4" x2="60" y2="22"/><circle class="fill" cx="60" cy="4" r="5"/><rect x="18" y="22" width="84" height="64" rx="24"/><path d="M39 53 q5 -6 10 0"/><path d="M71 53 q5 -6 10 0"/><path d="M46 67 q14 12 28 0"/><rect x="30" y="94" width="60" height="30" rx="13"/><path d="M46 109 l7 7 13 -14" style="stroke-width:3"/><line x1="18" y1="104" x2="30" y2="104"/><line x1="90" y1="104" x2="102" y2="104"/></svg>
+          <div class="wchip" style="color:#3f7a53; justify-content:center; margin-top:8px;">✓ Done</div>
+          <p style="font-size:12px; color:color-mix(in srgb,#1d1f20 55%,transparent); margin:6px 0 0;">Claim submitted successfully.</p>
+        </div>
+        <!-- error -->
+        <div style="padding:16px 24px; text-align:center;">
+          <svg viewBox="0 0 120 130" width="120" height="130" class="wise" style="--wise:#b46a4d; margin:0 auto;"><line x1="60" y1="4" x2="60" y2="22"/><circle class="fill" cx="60" cy="4" r="5"/><rect x="18" y="22" width="84" height="64" rx="24"/><line x1="40" y1="48" x2="48" y2="56"/><line x1="48" y1="48" x2="40" y2="56"/><line x1="72" y1="48" x2="80" y2="56"/><line x1="80" y1="48" x2="72" y2="56"/><path d="M48 72 q12 -8 24 0"/><rect x="30" y="94" width="60" height="30" rx="13"/><line x1="18" y1="104" x2="30" y2="104"/><line x1="90" y1="104" x2="102" y2="104"/></svg>
+          <div class="wchip" style="color:#b46a4d; justify-content:center; margin-top:8px;">! Something's off</div>
+          <p style="font-size:12px; color:color-mix(in srgb,#1d1f20 55%,transparent); margin:6px 0 0;">Couldn't reach your insurer.</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5 · EMPTY & ERROR -->
+    <div style="display:flex; flex-direction:column; gap:14px;">
+      <div class="artlabel"><span class="n">05</span><span class="t">Empty &amp; error</span><span class="d">first run · failed submission</span></div>
+      <div style="display:flex; gap:32px;">
+        <div class="blueprint" style="width:520px; height:440px; background:#f2f2f3; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:40px;">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <svg viewBox="0 0 120 130" width="110" height="120" class="wise" style="--wise:#416180;"><line x1="60" y1="4" x2="60" y2="22"/><circle class="fill" cx="60" cy="4" r="5"/><rect x="18" y="22" width="84" height="64" rx="24"/><circle class="fill" cx="44" cy="53" r="6.5"/><circle class="fill" cx="76" cy="53" r="6.5"/><path d="M48 69 q12 10 24 0"/><rect x="30" y="94" width="60" height="30" rx="13"/><line x1="18" y1="104" x2="30" y2="104"/><line x1="90" y1="104" x2="102" y2="104"/></svg>
+          <h3 style="margin:22px 0 8px;">Nothing here yet</h3>
+          <p style="font-size:14px; max-width:320px; color:color-mix(in srgb,#1d1f20 62%,transparent); margin:0 0 22px;">Start a claim and Wise will walk you through it — one plain-language question at a time.</p>
+          <a href="#" class="btn btn-primary" style="padding:11px 22px;">Start your first claim →</a>
+        </div>
+        <div class="blueprint" style="width:520px; height:440px; background:#f2f2f3; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:40px;">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <svg viewBox="0 0 120 130" width="110" height="120" class="wise" style="--wise:#b46a4d;"><line x1="60" y1="4" x2="60" y2="22"/><circle class="fill" cx="60" cy="4" r="5"/><rect x="18" y="22" width="84" height="64" rx="24"/><line x1="40" y1="48" x2="48" y2="56"/><line x1="48" y1="48" x2="40" y2="56"/><line x1="72" y1="48" x2="80" y2="56"/><line x1="80" y1="48" x2="72" y2="56"/><path d="M48 72 q12 -8 24 0"/><rect x="30" y="94" width="60" height="30" rx="13"/><line x1="18" y1="104" x2="30" y2="104"/><line x1="90" y1="104" x2="102" y2="104"/></svg>
+          <h3 style="margin:22px 0 8px;">Submission didn't go through</h3>
+          <p style="font-size:14px; max-width:340px; color:color-mix(in srgb,#1d1f20 62%,transparent); margin:0 0 8px;">We couldn't reach your insurer's system. Your claim is saved as a draft — nothing was lost.</p>
+          <div style="font-size:12px; color:color-mix(in srgb,#1d1f20 45%,transparent); margin-bottom:20px;">Error CW-503 · gateway timeout</div>
+          <div style="display:flex; gap:12px;"><a href="#" class="btn btn-primary" style="padding:11px 20px;">Try again</a><a href="#" class="btn btn-secondary" style="padding:11px 20px;">Save &amp; exit</a></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 6 · MOBILE DRAWER -->
+    <div style="display:flex; flex-direction:column; gap:14px;">
+      <div class="artlabel"><span class="n">06</span><span class="t">Mobile</span><span class="d">chat + slide-in history drawer</span></div>
+      <div style="display:flex; gap:40px;">
+        <!-- phone: chat -->
+        <div class="blueprint" style="width:390px; height:800px; background:#f2f2f3; display:flex; flex-direction:column; overflow:hidden;">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div style="height:34px; display:flex; align-items:center; justify-content:space-between; padding:0 20px; font-size:12px; font-family:'Barlow Condensed',sans-serif; border-bottom:1px solid var(--color-divider);"><span>9:41</span><span>ClaimWise</span><span>▮▮▮ ⌁</span></div>
+          <header style="padding:12px 16px; display:flex; align-items:center; gap:10px; border-bottom:1px solid var(--color-divider);">
+            <span style="font-size:20px;">☰</span>
+            <div style="flex:1;"><div style="font-family:'Barlow Condensed',sans-serif; font-size:16px; font-weight:600;">Kitchen water damage</div><div style="font-size:11px; color:color-mix(in srgb,#1d1f20 50%,transparent);">#CW-4821 · 60%</div></div>
+            <svg viewBox="0 0 120 130" width="24" height="26" class="wise" style="--wise:#416180;"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+          </header>
+          <div style="flex:1; overflow-y:auto; padding:18px 16px; display:flex; flex-direction:column; gap:16px;">
+            <div style="display:flex; gap:10px; max-width:88%;">
+              <svg viewBox="0 0 120 130" width="26" height="28" class="wise" style="--wise:#416180; flex:none; margin-top:2px;"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+              <div class="blueprint" style="background:#e9e9ea; padding:12px 14px; font-size:14px;"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>When did you notice the damage?</div>
+            </div>
+            <div style="display:flex; justify-content:flex-end;"><div style="background:#5980a6; color:#f2f2f3; padding:12px 14px; max-width:82%; font-size:14px;">Sunday ~8am, dishwasher hose burst.</div></div>
+            <div style="display:flex; gap:10px; max-width:88%;">
+              <svg viewBox="0 0 120 130" width="26" height="28" class="wise" style="--wise:#416180; flex:none; margin-top:2px;"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+              <div class="blueprint" style="background:#e9e9ea; padding:12px 14px; font-size:14px;"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>Got it — added to your form. Can you add a photo?</div>
+            </div>
+          </div>
+          <div style="padding:12px 16px; border-top:1px solid var(--color-divider);">
+            <div class="blueprint" style="background:#e9e9ea; display:flex; align-items:center; gap:8px; padding:7px 7px 7px 12px;"><i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+              <span style="flex:1; font-size:14px; color:color-mix(in srgb,#1d1f20 42%,transparent);">Message Wise…</span>
+              <button class="btn btn-primary" style="padding:7px 13px;">↑</button></div>
+          </div>
+        </div>
+        <!-- phone: drawer open -->
+        <div class="blueprint" style="width:390px; height:800px; background:#f2f2f3; position:relative; overflow:hidden;">
+          <i class="corner tl"></i><i class="corner tr"></i><i class="corner bl"></i><i class="corner br"></i>
+          <div style="position:absolute; inset:0; background:color-mix(in srgb,#1d1f20 40%,transparent);"></div>
+          <aside style="position:absolute; inset:0 70px 0 0; background:#ededee; display:flex; flex-direction:column; box-shadow:var(--shadow-lg);">
+            <div style="height:34px;"></div>
+            <div style="padding:14px 16px; display:flex; align-items:center; gap:9px; border-bottom:1px solid var(--color-divider);">
+              <svg viewBox="0 0 120 130" width="22" height="24" class="wise" style="--wise:#416180;"><rect x="20" y="22" width="80" height="62" rx="22"/><circle class="fill" cx="45" cy="52" r="6"/><circle class="fill" cx="75" cy="52" r="6"/><path d="M49 68 q11 9 22 0"/></svg>
+              <span style="font-family:'Barlow Condensed',sans-serif; font-size:18px; font-weight:600;">ClaimWise</span>
+            </div>
+            <div style="padding:14px 16px 8px;"><a href="#" class="btn btn-primary btn-block" style="margin:0;">+ New claim</a></div>
+            <div style="padding:14px 16px 6px; font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:color-mix(in srgb,#1d1f20 45%,transparent);">Recent</div>
+            <nav style="display:flex; flex-direction:column; padding:0 10px; gap:2px;">
+              <a href="#" style="padding:11px 12px; text-decoration:none; color:inherit; border-left:2px solid #5980a6; background:color-mix(in srgb,#5980a6 12%,transparent); font-size:14px;">Kitchen water damage<br><span style="font-size:11px; color:color-mix(in srgb,#1d1f20 50%,transparent);">Active · #CW-4821</span></a>
+              <a href="#" style="padding:11px 12px; text-decoration:none; color:inherit; border-left:2px solid transparent; font-size:14px;">Windshield crack<br><span style="font-size:11px; color:color-mix(in srgb,#1d1f20 50%,transparent);">Submitted · 2d ago</span></a>
+              <a href="#" style="padding:11px 12px; text-decoration:none; color:inherit; border-left:2px solid transparent; font-size:14px;">Lost luggage — Lisbon<br><span style="font-size:11px; color:color-mix(in srgb,#1d1f20 50%,transparent);">Paid out · Jun 3</span></a>
+            </nav>
+            <div style="margin-top:auto; padding:14px 16px; border-top:1px solid var(--color-divider); display:flex; align-items:center; gap:10px; font-size:13px;">
+              <div style="width:28px; height:28px; border:1px solid var(--color-divider); display:grid; place-items:center; font-family:'Barlow Condensed',sans-serif;">DA</div>Dana Alvarez</div>
+          </aside>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
