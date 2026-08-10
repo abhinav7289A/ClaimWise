@@ -16,6 +16,12 @@ dependencies = [
     "pyyaml>=6.0",
     # tqdm: progress bars for multi-document ingestion runs.
     "tqdm>=4.66",
+    # langchain-text-splitters: the standalone splitter package (not full
+    # LangChain). Its RecursiveCharacterTextSplitter is the reference
+    # implementation the ecosystem benchmarks against, so our baseline stays
+    # comparable to published numbers. Hand-rolling it is ~40 lines but invites
+    # subtle off-by-one bugs that would silently contaminate every later metric.
+    "langchain-text-splitters>=0.3",
 ]
 
 [tool.uv]

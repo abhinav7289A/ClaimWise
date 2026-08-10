@@ -44,6 +44,11 @@ Reads every PDF in `data/raw/`, extracts text page by page, cleans it (Unicode N
 
 Supports two extraction modes selectable from config: `text` (plain reading order, the honest Phase 1 baseline) and `blocks` (positioned text blocks sorted top-to-bottom then left-to-right). The mode is a switch rather than a hardcoded call specifically so Phase 2 can flip it and measure the retrieval delta attributably. Document IDs are content hashes, so re-ingesting the same PDF is idempotent and renaming a file does not create a duplicate. Failures are per-document: a broken PDF is logged and the run continues, but the process exits non-zero so no failure passes unnoticed.
 
+### `phase1_rag/chunk.py`
+Reads `data/processed/pages.jsonl` and splits each page into overlapping chunks, writing one JSON record per chunk to `data/processed/chunks.jsonl` plus a `chunks.meta.json` sidecar with the settings and size distribution. Uses LangChain's `RecursiveCharacterTextSplitter`, which tries paragraph → line → word → bare character and only descends to a harsher separator when a piece is still over budget, so breaks land on real boundaries instead of mid-sentence. Default budget is 1,000 characters (~250 tokens) with 150 characters of overlap, both driven from `config.yaml`.
+
+Chunks never span a page break: each page is split independently so every chunk inherits one exact page number, which is what makes a citation verifiable. The cost is that a clause continuing onto the next page gets divided — Phase 2's parent-document retrieval is the proper fix, not a larger chunk size. Chunk IDs are deterministic (`{doc_id}_p{page}_c{index}`), so re-running produces identical IDs and the vector store can be upserted rather than rebuilt. Reports how many chunks exceed bge-small's ~2,000-character input budget so silent truncation at embedding time is impossible.
+
 ---
 
 ## `metrics/`
@@ -91,7 +96,6 @@ Listed for orientation only — these files do not exist yet.
 
 | File | Planned role |
 |---|---|
-| `phase1_rag/chunk.py` | Split pages into overlapping chunks, carrying page metadata through |
 | `phase1_rag/embed_index.py` | Embed chunks on CPU and index them into Qdrant with `{user_id, doc_id, page, section}` |
 | `phase1_rag/rag_chain.py` | Retrieve → prompt → generate, with the generator behind a swappable interface |
 | `phase1_rag/build_eval_set.py` | Generate ~100 golden Q&A pairs for manual verification |

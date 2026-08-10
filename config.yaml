@@ -40,3 +40,22 @@ ingest:
   normalize_unicode: true
 
   output_filename: pages.jsonl
+
+chunk:
+  # Recursive splitting: try paragraph, then line, then word, then raw
+  # character — so a break lands on a real boundary whenever one exists inside
+  # the size budget, instead of slicing mid-sentence.
+  #
+  # 1000 characters is roughly 250 tokens. bge-small truncates at 512 tokens
+  # (~2000 chars), so this leaves comfortable headroom: nothing is silently cut
+  # off at embedding time.
+  chunk_size: 1000
+  # ~15% overlap, so a clause straddling a boundary survives intact in one of
+  # the two neighbouring chunks.
+  chunk_overlap: 150
+  # Trailing fragments shorter than this are dropped — a 12-character chunk
+  # produces a vector that matches everything weakly and nothing well.
+  min_chunk_chars: 50
+
+  input_filename: pages.jsonl
+  output_filename: chunks.jsonl
