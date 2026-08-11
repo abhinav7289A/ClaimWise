@@ -35,6 +35,12 @@ Marks `common` as a Python package. Exists so that any phase can import shared u
 ### `common/config.py`
 Loads `config.yaml` into a plain dict and reads nested values by dotted key (`cfg_get(cfg, "ingest.extraction_mode")`). Fails loudly with a clear message if the config file is missing or isn't a YAML mapping, rather than silently falling back to defaults — a silently-defaulted config produces metrics that cannot be reproduced. Every phase reads its settings through this one module so a run's behaviour is fully described by one versioned file.
 
+### `common/generator.py`
+The swappable generator slot — every LLM call in the project goes through it, and nothing else may talk to a provider directly. Exposes `generate(prompt, system) -> GenerationResult`, returning the answer plus token counts and latency so "tokens per query" is measurable without extra plumbing. One `OpenAICompatGenerator` class covers NVIDIA NIM, OpenRouter and Hugging Face Inference Providers, because all three speak the OpenAI chat-completions protocol and differ only in base URL, key and model name; Phase 5 adds a fourth entry pointing at the fine-tuned Qwen Space without changing the interface. Temperature defaults to 0 so evaluation is reproducible — a judged metric that drifts with sampling noise cannot be attributed to a pipeline change. Includes a sliding-window client-side throttle (NIM allows ~40 req/min and a full RAGAS run is ~1,000 calls) and exponential-backoff retries for 429/5xx only, never for 400/401 where retrying just burns quota. Missing API keys fail at construction, not 400 calls into an eval run. Runnable standalone as a connectivity check.
+
+### `.env.example`
+Template for the three API keys (`NVIDIA_API_KEY`, `OPENROUTER_API_KEY`, `HF_TOKEN`) with the URL to obtain each. Copy to `.env`, which is gitignored and never committed.
+
 ---
 
 ## `phase1_rag/` — naive RAG baseline
@@ -107,4 +113,3 @@ Listed for orientation only — these files do not exist yet.
 | `phase1_rag/rag_chain.py` | Retrieve → prompt → generate, with the generator behind a swappable interface |
 | `phase1_rag/build_eval_set.py` | Generate ~100 golden Q&A pairs for manual verification |
 | `evals/run_ragas.py` | Baseline RAGAS evaluation |
-| `.env.example` | Template for API keys (added when the first provider call appears) |

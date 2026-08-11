@@ -32,6 +32,13 @@ dependencies = [
     # qdrant-client: same API for embedded on-disk and server mode, so the
     # Phase 5 move to a hosted instance is a config change, not a rewrite.
     "qdrant-client>=1.10",
+    # openai: used as a generic client, not as a provider. NVIDIA NIM,
+    # OpenRouter and HF Inference Providers all speak the OpenAI protocol, so
+    # one client plus a base_url covers every generator we need. Hand-rolling
+    # httpx calls would mean reimplementing retries, timeouts and error types.
+    "openai>=1.40",
+    # python-dotenv: loads .env so API keys never live in config.yaml or code.
+    "python-dotenv>=1.0",
 ]
 
 [tool.uv]

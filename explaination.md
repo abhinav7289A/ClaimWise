@@ -308,6 +308,50 @@ vectors would genuinely be fine. What Qdrant buys is persistence, sub-linear
 search as the corpus grows, and — the decisive one — **filters applied during
 index traversal**. See §3.
 
+### Generation providers, and the economics of evaluation
+
+RAGAS is not one LLM call per question. Faithfulness costs 1–2 calls, answer
+relevancy 1, context recall 1, and **context precision costs one call per
+retrieved chunk** — 5 more at top-5. With answer generation that is roughly
+**9–11 calls per question**, so a 100-question golden set costs **~1,000 calls
+per evaluation**. Phase 2 needs one evaluation per technique.
+
+Measured against what's actually available:
+
+| Source | Allowance | Full RAGAS runs it supports |
+|---|---|---|
+| OpenRouter free | 50 req/day (1,000/day above $10 credits) | 1 run per **3 weeks** |
+| HF Pro credits | **$2 per month** (not per day) | ~2 runs per **month** |
+| **NVIDIA NIM** | **~40 req/min, no daily cap** | 1 run per **25–50 min**, repeatable |
+
+**The architectural fix matters more than the provider choice.** Retrieval
+metrics need no LLM at all. If the golden set stores the ground-truth page for
+each question, then `hit@5`, context recall and MRR are computed by comparing
+page numbers — pure Python, zero cost, instant. Only *generation-quality*
+metrics need a judge. That splits evaluation into two tiers:
+
+| Tier | Metrics | Cost | Cadence |
+|---|---|---|---|
+| **Retrieval** (deterministic) | hit@5, context recall, MRR, latency | free | after every change |
+| **Generation** (LLM-judged) | faithfulness, answer relevancy | ~10 calls/question | phase boundaries |
+
+Since Phase 2 is entirely about retrieval, nearly all of its per-technique
+re-evals run for free. This isn't a compromise forced by budget — it is how a
+cost-aware evals team would build it regardless, because a metric that runs in
+five seconds gets run, and one that costs a day doesn't.
+
+**Role assignment:** NIM is the eval workhorse; OpenRouter free handles
+development and hand-testing so it never competes with an eval run; HF Pro
+credits are *not* spent on evaluation, because that subscription's real value to
+this project is ZeroGPU serving in Phase 5.
+
+**Why one class covers all three.** NIM, OpenRouter and HF Inference Providers
+all expose the OpenAI chat-completions protocol. They differ only in base URL,
+API key and model id — so "provider" is configuration, not a code path, and
+`--provider openrouter` switches mid-eval. Phase 5 adds a fourth entry pointing
+at the fine-tuned Qwen Space and the interface is unchanged, which is precisely
+what makes the Phase 4 generator comparison valid.
+
 ### Planned models *(not yet in use)*
 
 | Model | Role | Phase |
@@ -333,29 +377,32 @@ Run A was the original corpus. The Star Health file in it turned out to be a
 against 174,999 from the SBI health policy, and the document itself pointed
 readers elsewhere for detail. It was replaced.
 
-| | Run A *(2026-08-10)* | Run B *(2026-08-10, corpus fixed)* |
+| | Run A *(brochure corpus)* | Run C *(corpus fixed + ligatures repaired)* |
 |---|---:|---:|
 | Documents | 4 | 4 |
 | Pages kept | 67 | **102** |
-| Total characters | 385,892 | not captured |
-| Mean chars/page | 5,760 | not captured |
+| Total characters | 385,892 | **491,986** |
+| Mean chars/page | 5,760 | **4,823** |
 
-Per-document page counts after the fix — Star Health went from 12 pages to 47,
-and its density from 1,423 chars/page to roughly 2,900:
+Per document, after both fixes:
 
-| Document | Type | Pages |
-|---|---|---:|
-| `starhealth__health__comprehensive` | health | 47 |
-| `sbigeneral__health__alpha` | health | 30 |
-| `sbigeneral__home__house-insurance` | home | 17 |
-| `iciciprulife__life__prusmart` | life | 8 |
+| Document | Type | Pages | Chars | Chars/page |
+|---|---|---:|---:|---:|
+| `starhealth__health__comprehensive` | health | 47 | 122,287 | 2,602 |
+| `sbigeneral__health__alpha` | health | 30 | 175,687 | 5,856 |
+| `sbigeneral__home__house-insurance` | home | 17 | 100,903 | 5,935 |
+| `iciciprulife__life__prusmart` | life | 8 | 93,109 | 11,639 |
+
+Star Health went from 12 pages / 1,423 chars per page as a brochure to 47 pages
+/ 2,602 as the real wording. The ICICI life document is an outlier at 11,639
+chars per page — dense multi-column fine print, roughly 2,900 tokens per page.
 
 ### 6.2 Chunking — 1000 chars / 150 overlap
 
 | Metric | Value |
 |---|---:|
 | Pages in | 102 |
-| Chunks out | **652** |
+| Chunks out | **653** |
 | Chars per chunk — min / median / mean / max | 52 / 945 / 819 / 1000 |
 | Chunks over the 2,000-char embedding budget | **0** |
 
@@ -365,7 +412,7 @@ expected left tail of page-end fragments.
 
 | Document | Chunks | Pages | Mean chars |
 |---|---:|---:|---:|
-| `sbigeneral__health__alpha` | 229 | 30 | 814 |
+| `sbigeneral__health__alpha` | 230 | 30 | 813 |
 | `starhealth__health__comprehensive` | 161 | 47 | 854 |
 | `sbigeneral__home__house-insurance` | 134 | 17 | 828 |
 | `iciciprulife__life__prusmart` | 128 | 8 | 776 |
@@ -375,11 +422,11 @@ expected left tail of page-end fragments.
 | Metric | Value |
 |---|---:|
 | Vector dimensions | 384 |
-| Chunks indexed | 652 |
-| Points in store | 652 |
-| Embed time | 37.02 s |
-| **Throughput** | **17.6 chunks/s** |
-| Upsert time | 6.47 s |
+| Chunks indexed | 653 |
+| Points in store | 653 |
+| Embed time | 36.68 s |
+| **Throughput** | **17.8 chunks/s** |
+| Upsert time | 2.22 s |
 
 `points == chunks` confirms the deterministic IDs are not colliding.
 
@@ -391,14 +438,11 @@ Query: *"What is the waiting period for pre-existing diseases?"*
 |---:|---:|---:|---|---|
 | 1 | 0.8102 | 30 | starhealth | Optional Cover — Buy Back of Pre-Existing Disease Waiting Period |
 | 2 | 0.7795 | 31 | starhealth | Portability, waiting period reduced by prior coverage; 36 months |
-| 3 | 0.7517 | 19 | sbigeneral | Changing the 24-month PED waiting period, Section 12.1 |
+| 3 | 0.7576 | 21 | sbigeneral | Sum Insured enhancement — exclusion applies afresh; specified disease/procedures |
 
 All three are genuinely on-topic, from both health insurers, with plausible page
 numbers, at healthy cosine scores. This is the first real evidence that semantic
 retrieval works on this corpus.
-
-> **All numbers in §6.1–6.4 predate the ligature fix in §7** and will be
-> superseded by the next full run.
 
 ### 6.5 Pending
 
@@ -464,6 +508,22 @@ confidently wrong.
 Ingestion now also warns when any Latin Extended-A character *survives* repair,
 so a publisher using an unknown mapping surfaces immediately instead of quietly
 poisoning the index.
+
+**Measured outcome.** Latin Extended-A occurrences went **47 → 0**, and 66 pages
+now contain correctly spelled `benefit` / `specified` / `floater` /
+`beneficiary`. The character deltas confirm the repair was surgical — it touched
+the two corrupted documents and left the clean one byte-identical:
+
+| Document | Before | After | Δ |
+|---|---:|---:|---:|
+| `sbigeneral__health__alpha` | 174,999 | 175,687 | +688 |
+| `sbigeneral__home__house-insurance` | 100,706 | 100,903 | +197 |
+| `iciciprulife__life__prusmart` | 93,109 | 93,109 | 0 |
+
+Retrieval changed as a direct result. On the same smoke query, the third hit was
+previously page 19 at score 0.7517 (reading `beneĤt`, `speciĤed`); it is now a
+*different and better* chunk — page 21 at **0.7576**, with "specified" spelled
+correctly. Repairing the vocabulary changed which chunk wins.
 
 **Lesson.** The smoke query in `embed_index.py` paid for itself on its first
 run. A pipeline that reports only counts and timings would have shown four
