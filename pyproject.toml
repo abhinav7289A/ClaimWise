@@ -22,6 +22,16 @@ dependencies = [
     # comparable to published numbers. Hand-rolling it is ~40 lines but invites
     # subtle off-by-one bugs that would silently contaminate every later metric.
     "langchain-text-splitters>=0.3",
+    # sentence-transformers: the reference runtime for BGE models. It applies
+    # the correct pooling and normalisation automatically; driving raw
+    # transformers means hand-rolling CLS pooling, which fails silently by
+    # producing worse vectors rather than an error. Qdrant's fastembed is a far
+    # lighter ONNX alternative, but Phase 2's cross-encoder reranker needs
+    # sentence-transformers anyway, so torch arrives one phase later at best.
+    "sentence-transformers>=3.0",
+    # qdrant-client: same API for embedded on-disk and server mode, so the
+    # Phase 5 move to a hosted instance is a config change, not a rewrite.
+    "qdrant-client>=1.10",
 ]
 
 [tool.uv]

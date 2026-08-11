@@ -11,7 +11,10 @@ Updated whenever a file is added or its responsibility changes.
 The project constitution. Defines the non-negotiable workflow (Claude writes code, never executes it; every file ships with an Execution Card; work stops until real run output is pasted back), the teaching contract (Concept Brief before each module, trade-off tables before design decisions), the compute and cost constraints (no paid cloud, $30 Modal hard cap, ZeroGPU for serving only), the six-phase build plan with per-phase metrics and exit criteria, and the metrics-honesty rules. Overrides all default assistant behaviour.
 
 ### `workflow.md`
-This file. A file-by-file map of the repository so the structure stays legible as it grows across six phases.
+This file. A file-by-file map of the repository so the structure stays legible as it grows across six phases. Answers *"what does this file do?"* in one paragraph each.
+
+### `explaination.md`
+The deep companion to this file: the **what, how and why** of every component, the technical detail behind each model, all measured results and benchmarks, and mermaid flowcharts covering the end-to-end phase pipeline, the Phase 1 build-time internals, and the query-time path. Also records defects found and fixed — the brochure-not-policy-wording corpus fault and the publisher-wide ligature corruption — because how a bug was caught is as instructive as the metric it would have spoiled. Every number in it comes from a real pasted run; unmeasured values are marked pending rather than estimated.
 
 ### `pyproject.toml`
 Declares the Python project and its dependencies for uv. Configured as a **virtual project** (`package = false`), meaning uv creates and manages `.venv` and installs dependencies but does not build or install ClaimWise itself — modules run from the repo root via `python -m package.module`, so new phase packages become importable without editing this file. Currently pins Phase 1 ingestion dependencies only (pymupdf, pyyaml, tqdm); retrieval dependencies are deliberately deferred to `embed_index.py` so that ~2GB of torch isn't downloaded before a single PDF has been parsed.
@@ -48,6 +51,11 @@ Supports two extraction modes selectable from config: `text` (plain reading orde
 Reads `data/processed/pages.jsonl` and splits each page into overlapping chunks, writing one JSON record per chunk to `data/processed/chunks.jsonl` plus a `chunks.meta.json` sidecar with the settings and size distribution. Uses LangChain's `RecursiveCharacterTextSplitter`, which tries paragraph → line → word → bare character and only descends to a harsher separator when a piece is still over budget, so breaks land on real boundaries instead of mid-sentence. Default budget is 1,000 characters (~250 tokens) with 150 characters of overlap, both driven from `config.yaml`.
 
 Chunks never span a page break: each page is split independently so every chunk inherits one exact page number, which is what makes a citation verifiable. The cost is that a clause continuing onto the next page gets divided — Phase 2's parent-document retrieval is the proper fix, not a larger chunk size. Chunk IDs are deterministic (`{doc_id}_p{page}_c{index}`), so re-running produces identical IDs and the vector store can be upserted rather than rebuilt. Reports how many chunks exceed bge-small's ~2,000-character input budget so silent truncation at embedding time is impossible.
+
+### `phase1_rag/embed_index.py`
+Reads `data/processed/chunks.jsonl`, embeds every chunk on CPU with a sentence-transformers BGE model, and upserts the vectors into an embedded on-disk Qdrant collection under `qdrant_storage/`, writing an `index_{model}.meta.json` sidecar with timings and settings. Collection names encode the embedding model (`claimwise__baai_bge_small_en_v1_5`), so two models can be indexed side by side and compared on the same golden questions instead of overwriting each other. Point IDs are `uuid5` of the chunk ID, making re-indexing an idempotent upsert rather than a duplication.
+
+Every point carries `user_id` in its payload and every search filters on it — the security boundary, wired in from day one while there is still only one user, because a filter retrofitted later gets forgotten in exactly one code path. Filtering happens inside the index traversal rather than after it, so results from another user are never scored at all. Note that the BGE query-instruction prefix is deliberately **not** applied here: those models are trained with the prefix on queries only and documents embedded bare, so the prefix lives in config and is applied by `rag_chain.py`. Each run ends with a filtered smoke query printing real top-3 hits with scores and page numbers, so an index that builds cleanly but returns nothing cannot pass silently.
 
 ---
 
@@ -96,7 +104,6 @@ Listed for orientation only — these files do not exist yet.
 
 | File | Planned role |
 |---|---|
-| `phase1_rag/embed_index.py` | Embed chunks on CPU and index them into Qdrant with `{user_id, doc_id, page, section}` |
 | `phase1_rag/rag_chain.py` | Retrieve → prompt → generate, with the generator behind a swappable interface |
 | `phase1_rag/build_eval_set.py` | Generate ~100 golden Q&A pairs for manual verification |
 | `evals/run_ragas.py` | Baseline RAGAS evaluation |

@@ -38,6 +38,11 @@ ingest:
   # NFKC normalisation: collapses ligatures and exotic spaces so that a query
   # embedding and a chunk embedding see the same characters.
   normalize_unicode: true
+  # Repair f-ligatures that some font subsets decode into Latin Extended-A
+  # letters ("beneĤt" -> "benefit", "ĥoater" -> "floater"). NFKC cannot catch
+  # these because the wrong characters are themselves valid Unicode. Both SBI
+  # documents in this corpus need it on every page.
+  repair_ligatures: true
 
   output_filename: pages.jsonl
 
@@ -59,3 +64,32 @@ chunk:
 
   input_filename: pages.jsonl
   output_filename: chunks.jsonl
+
+embed:
+  # bge-small-en-v1.5: 384-dim, ~33M params, strong retrieval quality per CPU
+  # second. Swap with --model to build a second collection and A/B the two.
+  model_name: BAAI/bge-small-en-v1.5
+  device: cpu
+  batch_size: 32
+  # Cosine similarity assumes unit-length vectors. Normalising here lets the
+  # index use a plain dot product without changing what the score means.
+  normalize: true
+  # BGE v1.5 models are trained with an instruction prefix on the QUERY side
+  # only — documents are embedded bare. Applying it to both, or to neither,
+  # measurably costs recall. Used by rag_chain.py at query time, never here.
+  query_prefix: "Represent this sentence for searching relevant passages: "
+
+index:
+  # Embedded on-disk Qdrant: in-process, no Docker, persists between runs. The
+  # client API is identical to server mode, so Phase 5 changes one line.
+  path: qdrant_storage
+  # Final collection name is "{prefix}__{model-slug}" so two embedding models
+  # can be indexed side by side and compared on the same questions.
+  collection_prefix: claimwise
+  distance: cosine
+  # Phase 1 has no auth, but user_id is written and filtered on from day one:
+  # it is a security boundary, and a filter retrofitted later gets forgotten in
+  # exactly one code path.
+  default_user_id: local-dev
+  upsert_batch_size: 128
+  input_filename: chunks.jsonl

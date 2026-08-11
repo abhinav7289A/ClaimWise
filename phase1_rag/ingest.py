@@ -58,6 +58,29 @@ FILENAME_PATTERN = re.compile(r"^(?P<insurer>[^_]+)__(?P<policy_type>[^_]+)__(?P
 
 UNKNOWN = "unknown"
 
+# Some publishers embed font subsets whose f-ligature glyphs decode into the
+# Latin Extended-A block instead of real letters. Unicode normalisation cannot
+# repair this: "Ĥ" is a legitimate character, so nothing marks the text as
+# broken. Left alone it silently corrupts core policy vocabulary — "beneĤt",
+# "speciĤed", "ĥoater", "OĦce" — which then fails to match any query using the
+# real words. Both SBI documents in this corpus are affected on every page;
+# Star Health and ICICI are clean.
+#
+# Every mapping below except U+0127 is directly evidenced in our corpus; U+0127
+# completes the standard ff / fi / fl / ffi / ffl glyph ordering.
+LIGATURE_REPAIRS = {
+    "ģ": "ff",   # ģ   staģ    -> staff
+    "Ĥ": "fi",   # Ĥ   beneĤt  -> benefit
+    "ĥ": "fl",   # ĥ   ĥoater  -> floater
+    "Ħ": "ffi",  # Ħ   OĦce    -> Office
+    "ħ": "ffl",  # ħ   (unobserved here; completes the sequence)
+}
+
+# After repair, no Latin Extended-A character should remain in English policy
+# text. Any that do mean a publisher uses a mapping we haven't seen yet, so we
+# warn loudly rather than embedding corrupted vocabulary.
+RESIDUAL_WORD = re.compile(r"\S*[Ā-ſ]\S*")
+
 
 @dataclass(frozen=True)
 class PageRecord:
@@ -222,12 +245,28 @@ def find_boilerplate_lines(
     return {line for line, count in counts.items() if count >= minimum_pages and line}
 
 
+def repair_ligatures(text: str) -> str:
+    """Restore f-ligatures that a PDF font subset decoded into wrong letters.
+
+    Args:
+        text: Extracted page text.
+
+    Returns:
+        The text with known mis-decoded ligature characters expanded back into
+        their real letter sequences.
+    """
+    for broken, correct in LIGATURE_REPAIRS.items():
+        text = text.replace(broken, correct)
+    return text
+
+
 def clean_page_text(
     raw_text: str,
     boilerplate: set[str],
     edge_lines: int,
     dehyphenate: bool,
     normalize_unicode: bool,
+    fix_ligatures: bool,
 ) -> str:
     """Normalise one page of extracted text.
 
@@ -237,6 +276,9 @@ def clean_page_text(
         edge_lines: How many lines at each edge are eligible for stripping.
         dehyphenate: Rejoin words broken across a line break.
         normalize_unicode: Apply NFKC normalisation.
+        fix_ligatures: Repair mis-decoded f-ligatures. Runs before
+            de-hyphenation, because repair can create the line-break patterns
+            de-hyphenation looks for.
 
     Returns:
         Cleaned text with collapsed whitespace and preserved paragraph breaks.
@@ -249,6 +291,9 @@ def clean_page_text(
         # characters. The rupee sign is left untouched by NFKC.
         text = unicodedata.normalize("NFKC", text)
     text = text.replace(" ", " ").replace("\r\n", "\n").replace("\r", "\n")
+
+    if fix_ligatures:
+        text = repair_ligatures(text)
 
     if dehyphenate:
         # "hospi-\ntalisation" -> "hospitalisation"
@@ -320,6 +365,7 @@ def ingest_pdf(pdf_path: Path, settings: dict[str, Any], ingested_at: str) -> li
             edge_lines=settings["repeated_line_edge_lines"],
             dehyphenate=settings["dehyphenate"],
             normalize_unicode=settings["normalize_unicode"],
+            fix_ligatures=settings["repair_ligatures"],
         )
         page_number = page_index + 1
         if len(cleaned) < settings["min_chars_per_page"]:
@@ -340,6 +386,19 @@ def ingest_pdf(pdf_path: Path, settings: dict[str, Any], ingested_at: str) -> li
                 extraction_mode=extraction_mode,
                 ingested_at=ingested_at,
             )
+        )
+
+    residual_words = {word for record in records for word in RESIDUAL_WORD.findall(record.text)}
+    if residual_words:
+        # Not fatal, but never silent: an unknown ligature mapping corrupts
+        # exactly the vocabulary queries are written in.
+        LOGGER.warning(
+            "%s: %d distinct word(s) still contain undecoded Latin Extended-A "
+            "characters after ligature repair — this publisher may use a mapping "
+            "we don't know yet. Samples: %s",
+            pdf_path.name,
+            len(residual_words),
+            ", ".join(sorted(residual_words)[:8]),
         )
 
     if skipped_pages:
@@ -457,6 +516,7 @@ def resolve_settings(config: dict[str, Any], args: argparse.Namespace) -> dict[s
         "repeated_line_edge_lines": cfg_get(config, "ingest.repeated_line_edge_lines", 3),
         "dehyphenate": cfg_get(config, "ingest.dehyphenate", True),
         "normalize_unicode": cfg_get(config, "ingest.normalize_unicode", True),
+        "repair_ligatures": cfg_get(config, "ingest.repair_ligatures", True),
     }
     return settings
 
