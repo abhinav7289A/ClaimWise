@@ -94,6 +94,56 @@ index:
   upsert_batch_size: 128
   input_filename: chunks.jsonl
 
+eval:
+  # ~100 golden Q&A pairs (CLAUDE.md Phase 1, task 5).
+  target_questions: 100
+  # Fraction that are negatives — questions the corpus cannot answer, where the
+  # correct behaviour is the refusal sentence. Hand-seeded, not generated.
+  negative_fraction: 0.15
+
+  # Sampling weights by policy type. Matches the corpus: 2 health wordings vs
+  # 1 home and 1 life, so health carries the eval and the other two are
+  # indicative only (D-2).
+  type_weights:
+    health: 0.5
+    home: 0.25
+    life: 0.25
+
+  # Quality filters. A generated question that reuses the source chunk's
+  # vocabulary is trivially retrievable and inflates hit@5 — it measures string
+  # matching, not semantic search. Reject when this fraction of the question's
+  # content words also appear in the source chunk.
+  max_vocab_overlap: 0.6
+  min_question_chars: 25
+  # Don't generate from fragments; short chunks rarely contain a full rule.
+  min_source_chunk_chars: 300
+  # How many extra chunks to try when generations get rejected.
+  oversample_factor: 1.6
+
+  # Rough blended rate for the running spend estimate. Provider-specific and
+  # approximate — it exists to show the budget draining, not to bill anyone.
+  estimated_usd_per_million_tokens: 0.7
+
+  output_filename: golden.jsonl
+  review_filename: review.md
+
+  # Retrieve this many chunks once, then slice for each k below. Retrieving 10
+  # costs the same as retrieving 5 and lets us see how far down a correct page
+  # sits when it misses the top-5 cut.
+  retrieval_top_k: 10
+  k_values: [1, 3, 5, 10]
+  results_dir: evals/results
+
+rag:
+  # How many chunks are retrieved and stuffed into the prompt. CLAUDE.md's
+  # target architecture is "rerank to top-5", so 5 is the baseline shape; in
+  # Phase 1 there is no reranker, so these are the raw top-5 by cosine score.
+  top_k: 5
+  # The exact sentence the model must emit when the context doesn't contain the
+  # answer. A fixed string makes refusals countable without an LLM judge, and
+  # becomes a training target for Phase 4's "answer not in context" negatives.
+  refusal_text: "That isn't covered in the policy documents you've uploaded."
+
 generator:
   # The swappable slot. Phases 1-3 point this at a hosted free model; Phase 5
   # points it at the fine-tuned Qwen endpoint. Nothing upstream changes,

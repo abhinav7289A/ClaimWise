@@ -531,6 +531,175 @@ green stages and a silently damaged index.
 
 ---
 
+### 7.3 A false refusal caused by an over-strict grounding contract
+
+**Symptom.** *"What is the co-payment for someone who joins at age 65?"* returned
+the refusal sentence, despite the corpus containing the answer.
+
+**Investigation.** The clause exists in `starhealth__health__comprehensive.pdf`
+page 39: *"co-payment of 10% of each and every claim amount ... for Insured
+Persons whose age at the time of entry is 61 years and above."* Retrieval
+returned page 39 at rank 3 — so the chunk **was in the model's context**.
+
+The decisive test was rephrasing the question to echo the policy's own wording:
+
+| Question | p.39 retrieved | Outcome |
+|---|---|---|
+| "co-payment for someone who joins at **age 65**?" | rank 3 | **refused** |
+| "co-payment for members who enter at **61 years or above**?" | rank 2 | answered, cited `[p.39]` |
+
+Identical context, different phrasing, opposite outcome. Retrieval was not at
+fault.
+
+**Cause.** The system prompt. Rule 4 read *"Never calculate, estimate, convert
+or total anything"*, and rule 3 said to refuse *"if the passages do not contain
+the answer"*. Together they led the model to conclude that "65" appearing
+nowhere meant the answer was absent, and that deciding 65 ≥ 61 was forbidden
+computation. This is instruction-following, not capability — Llama 3.3 70B can
+compare two integers.
+
+**Fix.** Rule 4 was written to stop the model doing co-pay arithmetic (₹2.4L ×
+10%), which belongs to Phase 3's deterministic calculator. It was too broad. The
+contract now separates the two: applying a stated *threshold* to the user's
+situation is required, while computing *figures* remains forbidden. A new rule
+states explicitly that a general rule answers a question about a specific case
+under it, and refusal is narrowed to "the passages do not address the question
+at all".
+
+**Verified.** Same question, same retrieval `[1, 3, 39, 15, 20]`:
+
+| | Before | After |
+|---|---|---|
+| Answer | refusal sentence | "10% of each and every claim amount [p.39]" |
+| `refused` | True | **False** |
+| Citation | none | `p.39`, valid |
+
+The regression check held — the out-of-scope meteor question still refuses in 13
+output tokens, so relaxing the contract did not cause over-answering.
+
+**Why it matters.** A false refusal is a failure mode in its own right. A system
+that declines when the answer is in front of it is useless in a different way
+from one that fabricates — and it is *harder* to notice, because refusing looks
+like caution. Phase 4's RAFT dataset must therefore train both halves: refuse
+when the context is silent, **and** answer when it is not. This example is a
+ready-made training case for the second half.
+
+### 7.4 Retrieval instability across question phrasings *(open weakness, not fixed)*
+
+**Symptom.** The same underlying question, with only the age changed, retrieves
+a different chunk set — and the one clause that can answer it drops out.
+
+| Question | Retrieved pages | Clause page 39 present? |
+|---|---|---|
+| "co-payment for someone who joins at **age 65**?" | 1, 3, **39**, 15, 20 | yes, rank 3 |
+| "co-payment for someone who joins at **age 45**?" | 1, 3, 20, 20, 1 | **no** |
+
+**Why it happens.** Dense retrieval embeds the whole question, so a number that
+carries no semantic weight for the policy text still shifts the query vector.
+Nothing anchors the search to the literal term "co-payment", which appears
+verbatim in the target chunk.
+
+**Secondary observation.** The age-45 result covers only **three distinct pages
+across five slots** — two chunks from page 20 and two from page 1. Duplicate
+pages consume context budget without adding information.
+
+**Why it is not fixed here.** Both problems are precisely what Phase 2 exists to
+solve, and fixing them now would forfeit the measurement:
+
+- **Hybrid search (BM25 + dense)** would match "co-payment" lexically regardless
+  of the age in the question.
+- **Query rewriting** would normalise both phrasings toward the same search.
+- **Diversity-aware selection** would stop one page occupying multiple slots.
+
+Recorded here as a baseline weakness with a reproducible test case, so the
+Phase 2 delta table can show the improvement rather than assert it.
+
+### 7.5 A verified-faithful answer *(what "working" looks like)*
+
+Question: *"What is the waiting period for pre-existing diseases?"*
+
+> "The waiting period for pre-existing diseases is 36 months [p.31], but it can
+> be reduced to 12 months if the Insured Person opts for the 'Buy Back of
+> Pre-Existing Disease Waiting Period' option and pays an additional premium
+> [p.30]."
+
+Checked against the source chunk, page 30: *"reduction of waiting period in
+respect of Pre-Existing Diseases from 36 months to 12 months."* Both figures are
+correct, and each is attributed to the page it actually came from.
+
+Worth stating explicitly: **citation validity and faithfulness are different
+properties.** Our citation check is deterministic and free, but it only proves
+the cited page was retrieved — not that the sentence attached to it is true.
+Confirming the numbers required reading the chunk. That gap is exactly why
+RAGAS faithfulness needs an LLM judge and cannot be computed for free.
+
+### 7.6 A whole document silently missing from the eval set
+
+**Symptom.** No error, no warning, no failed run. Just a summary line:
+
+```
+items written      : 100
+  positives        : 85
+  negatives        : 15
+mean vocab overlap : 0.377
+rejections         : {'vocab_leakage': 10}
+by policy type     : {'health': 59, 'home': 26, '': 15}
+```
+
+Everything reads as success — 100 items, sensible overlap, filters working. But
+there is no `life` key. **The ICICI life policy contributed zero questions.**
+
+**Diagnosis, from arithmetic alone.** 59 + 26 = 85 accepted, plus 10 rejections
+= **95 generation attempts**. The sampler had allocated 68 health + 34 home + 34
+life = 136 candidate chunks *in that order*, and the loop stopped the instant it
+held 85 accepted items — 95 attempts in, still inside the home block. It never
+reached a life chunk.
+
+**Root cause.** Oversampling was applied **per type**, but the stopping condition
+was **global**:
+
+```python
+attempts = int(positives_wanted * oversample_factor)   # 136 candidates
+for chunk in sampled:                                  # health, then home, then life
+    if len(items) >= positives_wanted:                 # global stop at 85
+        break
+```
+
+Oversampling exists to absorb rejections. When rejections are few, the surplus
+from the *earlier* types satisfies the global target and every later type is
+starved. The perverse consequence: **the better the generator performs, the worse
+the bug gets.** With 40 rejections instead of 10 it would have reached life and
+looked perfectly healthy — which is exactly why this survived the `--limit 5`
+smoke test.
+
+**Why it mattered.** Not a cosmetic imbalance. An eval set with no life questions
+**cannot detect any regression in that document at all**, while presenting itself
+as a complete 100-item golden set. Every subsequent metric would have been
+quietly measured over three-quarters of the corpus. The intended 50/25/25 split
+came out 69/31/0.
+
+**Fix.** Three changes:
+
+1. `allocate_targets()` splits the positive quota across types by weight using
+   the largest-remainder method, so the per-type targets sum exactly.
+2. `sample_chunks()` now returns candidates **grouped by policy type** instead of
+   one flat list, and generation runs per type against its own accepted-item
+   target. Oversampling absorbs rejections *within* a type and can no longer
+   spend one type's budget on another.
+3. A weighted type that produces **zero** questions is now a hard failure
+   (exit 1) with an explicit message, and any shortfall logs a warning naming
+   the type and the gap.
+
+**Lesson — the one worth keeping.** This was not a crash; it was a summary that
+looked like success. The single line that exposed it was `by policy type`, which
+exists only because the summary reports a *distribution* rather than a total. A
+run summary that prints only counts and averages cannot show you the shape of
+what it produced, and shape is where this class of bug lives. It is the same
+lesson as the smoke query in §7.2: **make runs report what they produced, not
+just that they finished.**
+
+---
+
 ## 8. Open decisions
 
 | Decision | Status |

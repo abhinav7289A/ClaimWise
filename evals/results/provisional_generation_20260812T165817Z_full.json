@@ -1,0 +1,50 @@
+{
+  "created_at": "2026-08-12T16:58:17+00:00",
+  "tag": "full",
+  "provisional": true,
+  "generator": {
+    "provider": "hf",
+    "model": "meta-llama/Llama-3.3-70B-Instruct"
+  },
+  "top_k": 5,
+  "free_metrics": {
+    "positives": 85,
+    "negatives": 15,
+    "citation_coverage": 0.961,
+    "citation_validity": 0.9595,
+    "fabricated_citation_items": [
+      "g-043",
+      "g-056",
+      "g-057"
+    ],
+    "false_refusal_rate": 0.0941,
+    "false_refusal_items": [
+      "g-002",
+      "g-008",
+      "g-037",
+      "g-045",
+      "g-049",
+      "g-054",
+      "g-077",
+      "g-080"
+    ],
+    "refusal_accuracy": 0.9333,
+    "missed_refusal_items": [
+      "g-097"
+    ],
+    "latency_seconds": {
+      "median": 1.341,
+      "p95": 4.388
+    },
+    "tokens": {
+      "prompt": 142207,
+      "completion": 5206,
+      "total": 147413,
+      "mean_per_query": 1474
+    },
+    "estimated_usd": 0.1032
+  },
+  "ragas": {
+    "error": "ragas imports failed: No module named 'langchain_community.chat_models.vertexai'"
+  }
+}

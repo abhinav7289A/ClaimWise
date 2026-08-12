@@ -1,0 +1,65 @@
+{
+  "positives": 85,
+  "negatives": 15,
+  "hit_at_k_page": {
+    "1": 0.4118,
+    "3": 0.6353,
+    "5": 0.6941,
+    "10": 0.8118
+  },
+  "hit_at_k_chunk": {
+    "1": 0.2941,
+    "3": 0.4588,
+    "5": 0.5882,
+    "10": 0.7176
+  },
+  "mrr": 0.5321,
+  "page_recall_at_5": 0.6941,
+  "latency_ms": {
+    "median": 23.23,
+    "p95": 28.5
+  },
+  "by_policy_type": {
+    "health": {
+      "items": 43,
+      "hit_at_5_page": 0.6744,
+      "mrr": 0.4879
+    },
+    "home": {
+      "items": 21,
+      "hit_at_5_page": 0.7619,
+      "mrr": 0.6067
+    },
+    "life": {
+      "items": 21,
+      "hit_at_5_page": 0.6667,
+      "mrr": 0.5481
+    }
+  },
+  "negatives_mean_top_score": 0.6687,
+  "missed_item_ids": [
+    "g-002",
+    "g-009",
+    "g-012",
+    "g-017",
+    "g-030",
+    "g-041",
+    "g-049",
+    "g-054",
+    "g-058",
+    "g-059",
+    "g-067",
+    "g-069",
+    "g-074",
+    "g-076",
+    "g-077",
+    "g-078"
+  ],
+  "created_at": "2026-08-12T07:26:43+00:00",
+  "tag": "provisional",
+  "provisional": true,
+  "embed_model": "BAAI/bge-small-en-v1.5",
+  "collection": "claimwise__baai_bge_small_en_v1_5",
+  "retrieval_top_k": 10,
+  "golden_set": "data/eval/golden.jsonl"
+}

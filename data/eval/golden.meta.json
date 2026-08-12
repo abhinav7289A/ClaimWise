@@ -1,0 +1,32 @@
+{
+  "created_at": "2026-08-12T06:58:20+00:00",
+  "settings": {
+    "target": 100,
+    "negative_fraction": 0.15,
+    "type_weights": {
+      "health": 0.5,
+      "home": 0.25,
+      "life": 0.25
+    },
+    "max_vocab_overlap": 0.6,
+    "min_question_chars": 25,
+    "min_source_chunk_chars": 300,
+    "oversample_factor": 1.6,
+    "usd_per_million": 0.7,
+    "refusal_text": "That isn't covered in the policy documents you've uploaded.",
+    "seed": 42
+  },
+  "items": 100,
+  "positives": 85,
+  "negatives": 15,
+  "rejections": {
+    "vocab_leakage": 11
+  },
+  "by_policy_type": {
+    "health": 43,
+    "home": 21,
+    "life": 21,
+    "": 15
+  },
+  "mean_vocab_overlap": 0.379
+}

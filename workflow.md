@@ -13,6 +13,9 @@ The project constitution. Defines the non-negotiable workflow (Claude writes cod
 ### `workflow.md`
 This file. A file-by-file map of the repository so the structure stays legible as it grows across six phases. Answers *"what does this file do?"* in one paragraph each.
 
+### `decisions.md`
+The engineering history: every design decision (`D-n`) with the options that were rejected and why, and every problem (`P-n`) with its symptom, diagnosis, root cause, fix and verification — organised by phase and cross-linked. Records what things cost in time, marks each item Resolved / Open-deferred / Unresolved, and keeps deliberately-deferred weaknesses visible so Phase 2 can *demonstrate* improvements against reproducible test cases rather than assert them. Also records wrong turns, including a hypothesis that neatly explained two unrelated symptoms and turned out to be wrong about one of them.
+
 ### `explaination.md`
 The deep companion to this file: the **what, how and why** of every component, the technical detail behind each model, all measured results and benchmarks, and mermaid flowcharts covering the end-to-end phase pipeline, the Phase 1 build-time internals, and the query-time path. Also records defects found and fixed — the brochure-not-policy-wording corpus fault and the publisher-wide ligature corruption — because how a bug was caught is as instructive as the metric it would have spoiled. Every number in it comes from a real pasted run; unmeasured values are marked pending rather than estimated.
 
@@ -63,6 +66,30 @@ Reads `data/processed/chunks.jsonl`, embeds every chunk on CPU with a sentence-t
 
 Every point carries `user_id` in its payload and every search filters on it — the security boundary, wired in from day one while there is still only one user, because a filter retrofitted later gets forgotten in exactly one code path. Filtering happens inside the index traversal rather than after it, so results from another user are never scored at all. Note that the BGE query-instruction prefix is deliberately **not** applied here: those models are trained with the prefix on queries only and documents embedded bare, so the prefix lives in config and is applied by `rag_chain.py`. Each run ends with a filtered smoke query printing real top-3 hits with scores and page numbers, so an index that builds cleanly but returns nothing cannot pass silently.
 
+### `phase1_rag/rag_chain.py`
+The end-to-end baseline: embeds the question (with the BGE instruction prefix that documents deliberately don't get), searches Qdrant filtered by `user_id` plus optional insurer/policy-type, assembles one prompt from the top-5 passages, generates through the swappable generator, and verifies the result. Answers arrive as a `RagAnswer` carrying the retrieved chunks, cited pages, timings and token counts — everything the eval harness needs, with no separate instrumentation pass.
+
+Grounding is an explicit contract, not a hope: passages are labelled with their page numbers in the header so citing is a copy rather than a recall task; the system prompt forbids outside knowledge; refusal has fixed wording so refusals are countable without an LLM judge; and arithmetic is banned outright, since Phase 3 adds a deterministic calculator and an LLM doing co-pay maths in its head is a bug. When retrieval returns nothing the module refuses without calling the model at all, saving a request. Every `[p.N]` the model emits is checked against the pages actually retrieved, and a fabricated citation exits non-zero — a free, deterministic signal on every call, and the same one Phase 4.5's GRPO reward function will optimise. The system prompt is a module constant because Phase 4 must generate RAFT training data in exactly this format.
+
+### `phase1_rag/build_eval_set.py`
+Generates golden Q&A pairs from sampled chunks and writes `data/eval/golden.jsonl` plus a human-readable `review.md` that places each question beside the exact chunk it came from, so verification never requires cross-referencing two files. Sampling is stratified by policy type and spread across pages so the set covers the corpus rather than clustering on whichever pages happen to be long, and it's seeded for reproducibility.
+
+Its real job is avoiding the circularity trap: an LLM asked to write a question about a passage inherits that passage's vocabulary, producing questions retrieval finds trivially and an inflated hit@5 that measures string matching rather than semantic search. Three defences — a persona-and-paraphrase generation prompt, a deterministic filter rejecting questions whose content words overlap the source chunk beyond a threshold, and hand-seeded negatives drawn from out-of-scope domains (motor, travel, marine, crop) rather than generated, since an LLM asked for an unanswerable question sometimes writes an answerable one. Rejection reasons are counted and reported so leakage is visible rather than assumed. Every item carries `ground_truth_pages`, the field that makes hit@5, MRR and context recall pure-Python comparisons instead of paid API runs. Items start `verified: false`; a human flips them after review.
+
+---
+
+## `evals/` — evaluation harnesses
+
+### `evals/retrieval_metrics.py`
+The free evaluation tier: runs every golden question through retrieval only — no generation, **zero LLM calls** — and reports hit@k, MRR, page recall, and latency percentiles, writing both a summary JSON and a per-item JSONL to `evals/results/`. Because it costs nothing and finishes in seconds, it is the harness Phase 2 runs after every single technique; `--baseline <previous.json>` prints the deltas that Phase 2's attribution table is built from.
+
+Reports hit at two strictnesses. **Page-level** counts any chunk from the correct page, matching how citations work; **exact-chunk** demands the specific source chunk. The gap between them distinguishes "found the right region, wrong passage" (a chunk-size problem) from "didn't find it at all" (an embedding problem). MRR is reported alongside hit@k because a reranker's whole job is moving correct pages *upward*, an improvement hit@5 alone would show as zero. Negatives have no page to find, so it reports their mean top-1 similarity instead — a high score there means refusal rests purely on the model's judgment rather than being backed by weak retrieval. Defaults to verified items only; `--allow-unverified` produces provisional numbers and stamps them as such in the output file so they can't be mistaken for a baseline.
+
+### `evals/run_ragas.py`
+The paid evaluation tier: answers every golden question through the full RAG chain, then scores the answers. Reports four metrics for **free** — citation validity (every `[p.N]` checked against pages actually retrieved), citation coverage, false refusal rate on positives, and refusal accuracy on negatives — plus latency, tokens per query and estimated spend. On top of that it runs RAGAS `faithfulness` and `answer_relevancy` through a judge model.
+
+Deliberately runs only those two RAGAS metrics. `context_precision` costs one LLM call *per retrieved chunk*, which is what makes a full RAGAS suite ~1,000 calls per 100 questions — but context recall and precision are already computed exactly and for free in `retrieval_metrics.py` from ground-truth pages, so paying a judge to estimate a known number is waste. That cuts the run to roughly 4 calls per question. `--skip-ragas` drops to 1 call per question for the free metrics alone, and a RAGAS failure is caught and reported without discarding those metrics. Only non-refusal positives are scored, since faithfulness of a refusal is meaningless.
+
 ---
 
 ## `metrics/`
@@ -110,6 +137,5 @@ Listed for orientation only — these files do not exist yet.
 
 | File | Planned role |
 |---|---|
-| `phase1_rag/rag_chain.py` | Retrieve → prompt → generate, with the generator behind a swappable interface |
-| `phase1_rag/build_eval_set.py` | Generate ~100 golden Q&A pairs for manual verification |
-| `evals/run_ragas.py` | Baseline RAGAS evaluation |
+| `metrics/failure_analysis_p1.md` | Phase 1 exit criterion: the 10 worst failures, analysed |
+| `phase2_advanced/rerank.py` | Cross-encoder reranking — Phase 2's highest-value first move |

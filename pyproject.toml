@@ -39,6 +39,20 @@ dependencies = [
     "openai>=1.40",
     # python-dotenv: loads .env so API keys never live in config.yaml or code.
     "python-dotenv>=1.0",
+    # ragas: the standard RAG evaluation suite, so our faithfulness and answer
+    # relevancy numbers are comparable to published ones rather than to prompts
+    # we invented. Only the two judge-requiring metrics are used — context
+    # precision/recall are computed deterministically for free in
+    # evals/retrieval_metrics.py.
+    "ragas>=0.2",
+    # langchain-openai / langchain-huggingface: the wrappers ragas needs to talk
+    # to an arbitrary OpenAI-compatible endpoint and a local embedding model.
+    "langchain-openai>=0.2",
+    "langchain-huggingface>=0.1",
+    # langchain-community: ragas imports it transitively and the resolved
+    # version was missing modules it expected. Pinned explicitly so the
+    # dependency is visible rather than a surprise at import time.
+    "langchain-community>=0.3",
 ]
 
 [tool.uv]
