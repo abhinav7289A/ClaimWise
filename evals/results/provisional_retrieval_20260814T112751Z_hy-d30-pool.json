@@ -1,0 +1,80 @@
+{
+  "positives": 85,
+  "negatives": 15,
+  "hit_at_k_page": {
+    "1": 0.4353,
+    "3": 0.5882,
+    "5": 0.6588,
+    "10": 0.7765,
+    "20": 0.8588,
+    "30": 0.8941
+  },
+  "hit_at_k_chunk": {
+    "1": 0.2941,
+    "3": 0.5059,
+    "5": 0.5647,
+    "10": 0.6706,
+    "20": 0.7882,
+    "30": 0.8353
+  },
+  "hit_at_k_loose": {
+    "1": 0.4353,
+    "3": 0.5882,
+    "5": 0.6588,
+    "10": 0.8,
+    "20": 0.9059,
+    "30": 0.9294
+  },
+  "mrr": 0.5367,
+  "page_recall_at_5": 0.6588,
+  "latency_ms": {
+    "median": 27.09,
+    "p95": 33.35
+  },
+  "by_policy_type": {
+    "health": {
+      "items": 43,
+      "hit_at_5_page": 0.6977,
+      "mrr": 0.5824
+    },
+    "home": {
+      "items": 21,
+      "hit_at_5_page": 0.7143,
+      "mrr": 0.5399
+    },
+    "life": {
+      "items": 21,
+      "hit_at_5_page": 0.5238,
+      "mrr": 0.44
+    }
+  },
+  "negatives_mean_top_score": 0.0304,
+  "missed_item_ids": [
+    "g-017",
+    "g-030",
+    "g-058",
+    "g-059",
+    "g-067",
+    "g-069",
+    "g-074",
+    "g-077",
+    "g-078"
+  ],
+  "created_at": "2026-08-14T11:27:51+00:00",
+  "tag": "hy-d30-pool",
+  "provisional": true,
+  "rerank": false,
+  "rerank_depth": null,
+  "hybrid": true,
+  "hybrid_config": {
+    "dense_top_k": 30,
+    "lexical_top_k": 30,
+    "rrf_k": 60
+  },
+  "rerank_model": null,
+  "rerank_ms_median": 0.0,
+  "embed_model": "BAAI/bge-small-en-v1.5",
+  "collection": "claimwise__baai_bge_small_en_v1_5",
+  "retrieval_top_k": 10,
+  "golden_set": "data/eval/golden.jsonl"
+}

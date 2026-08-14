@@ -55,6 +55,8 @@ from tqdm import tqdm
 from common.config import DEFAULT_CONFIG_PATH, cfg_get, load_config
 from phase1_rag.embed_index import collection_name_for
 from phase1_rag.rag_chain import build_search_filter, retrieve
+from phase2_advanced.hybrid import BM25Index, build_bm25_index, hybrid_retrieve
+from phase2_advanced.rerank import CrossEncoderReranker, build_reranker
 
 LOGGER = logging.getLogger("claimwise.retrieval_metrics")
 
@@ -81,7 +83,10 @@ class ItemResult:
             *ignoring document*. Kept only to quantify how much the naive
             page-only comparison over-reports.
         chunk_rank: 1-based rank of the exact source chunk, or None.
-        latency_ms: Embed-and-search time.
+        latency_ms: Embed-and-search time, plus reranking when enabled.
+        rerank_ms: Time spent in the cross-encoder, 0 when disabled. Reported
+            separately because Phase 2's delta table pairs every quality gain
+            with its latency cost.
     """
 
     item_id: str
@@ -98,6 +103,7 @@ class ItemResult:
     loose_page_rank: int | None = None
     chunk_rank: int | None = None
     latency_ms: float = 0.0
+    rerank_ms: float = 0.0
 
 
 def load_golden(path: Path, verified_only: bool) -> list[dict[str, Any]]:
@@ -157,11 +163,17 @@ def evaluate_item(
     collection_name: str,
     embedder: SentenceTransformer,
     settings: dict[str, Any],
+    reranker: CrossEncoderReranker | None = None,
+    bm25: BM25Index | None = None,
 ) -> ItemResult:
     """Retrieve for one golden item and record where the correct page landed.
 
     Deliberately does not generate an answer. This tier measures retrieval only,
     which is what makes it free.
+
+    When a reranker is supplied, the *entire* candidate list is reordered rather
+    than truncated, so hit@k stays computable at every k and the before/after
+    comparison is exact — same questions, same candidates, different ordering.
 
     Args:
         item: A golden set item.
@@ -169,21 +181,40 @@ def evaluate_item(
         collection_name: Collection to search.
         embedder: Query embedding model, matching the index.
         settings: Resolved evaluation settings.
+        reranker: Optional cross-encoder applied after retrieval.
+        bm25: Optional lexical index. When present, retrieval is dense + BM25
+            fused by RRF instead of dense alone.
 
     Returns:
         The item's retrieval outcome.
     """
     started = time.perf_counter()
-    chunks = retrieve(
-        client,
-        collection_name=collection_name,
-        embedder=embedder,
-        question=item["question"],
-        top_k=settings["retrieval_top_k"],
-        query_prefix=settings["query_prefix"],
-        normalize=settings["normalize"],
-        search_filter=build_search_filter(settings["user_id"]),
-    )
+    if bm25 is not None:
+        chunks = hybrid_retrieve(
+            client,
+            collection_name=collection_name,
+            embedder=embedder,
+            bm25=bm25,
+            question=item["question"],
+            settings=settings,
+        )
+    else:
+        chunks = retrieve(
+            client,
+            collection_name=collection_name,
+            embedder=embedder,
+            question=item["question"],
+            top_k=settings["retrieval_top_k"],
+            query_prefix=settings["query_prefix"],
+            normalize=settings["normalize"],
+            search_filter=build_search_filter(settings["user_id"]),
+        )
+
+    rerank_ms = 0.0
+    if reranker is not None:
+        rerank_started = time.perf_counter()
+        chunks = reranker.rerank(item["question"], chunks)
+        rerank_ms = (time.perf_counter() - rerank_started) * 1000.0
     latency_ms = (time.perf_counter() - started) * 1000.0
 
     pages = [chunk.page for chunk in chunks]
@@ -217,6 +248,7 @@ def evaluate_item(
         loose_page_rank=first_rank(pages, ground_truth_pages) if ground_truth_pages else None,
         chunk_rank=first_rank(chunk_ids, {source_chunk_id}) if source_chunk_id else None,
         latency_ms=round(latency_ms, 2),
+        rerank_ms=round(rerank_ms, 2),
     )
 
 
@@ -433,6 +465,30 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--baseline", type=Path, default=None, help="Previous results JSON, to print deltas."
     )
+    parser.add_argument(
+        "--rerank", action="store_true", help="Apply cross-encoder reranking (Phase 2)."
+    )
+    parser.add_argument(
+        "--rerank-depth",
+        type=int,
+        default=None,
+        help="Candidates to retrieve before reranking. Overrides --top-k when --rerank is set.",
+    )
+    parser.add_argument("--rerank-model", default=None, help="Override rerank.model_name.")
+    parser.add_argument(
+        "--hybrid", action="store_true", help="Fuse BM25 with dense retrieval via RRF (Phase 2)."
+    )
+    # Sweepable from the CLI for the same reason rerank depth is: fusion is a
+    # displacement trade — every lexical candidate admitted to a fixed-size pool
+    # evicts a dense one — so the contribution widths are the parameter that
+    # decides whether hybrid helps, and sweeping them costs nothing.
+    parser.add_argument(
+        "--dense-top-k", type=int, default=None, help="Override hybrid.dense_top_k."
+    )
+    parser.add_argument(
+        "--lexical-top-k", type=int, default=None, help="Override hybrid.lexical_top_k."
+    )
+    parser.add_argument("--rrf-k", type=int, default=None, help="Override hybrid.rrf_k.")
     parser.add_argument("--tag", default="", help="Label recorded in the results file.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
     return parser
@@ -448,8 +504,21 @@ def resolve_settings(config: dict[str, Any], args: argparse.Namespace) -> dict[s
     Returns:
         Resolved settings for this run.
     """
+    # With reranking on, the candidate pool is what gets retrieved and the
+    # cross-encoder reorders all of it — so rerank depth *is* retrieval depth.
+    rerank_depth = args.rerank_depth or cfg_get(config, "rerank.candidate_depth", 30)
     return {
-        "retrieval_top_k": args.top_k or cfg_get(config, "eval.retrieval_top_k", 10),
+        "rerank": bool(args.rerank),
+        "rerank_depth": rerank_depth if args.rerank else None,
+        "hybrid": bool(args.hybrid),
+        # Hybrid fuses down to candidate_depth, which the reranker then narrows.
+        "candidate_depth": rerank_depth,
+        "dense_top_k": args.dense_top_k or cfg_get(config, "hybrid.dense_top_k", 30),
+        "lexical_top_k": args.lexical_top_k or cfg_get(config, "hybrid.lexical_top_k", 30),
+        "rrf_k": args.rrf_k or cfg_get(config, "hybrid.rrf_k", 60),
+        "retrieval_top_k": (
+            rerank_depth if args.rerank else (args.top_k or cfg_get(config, "eval.retrieval_top_k", 10))
+        ),
         "k_values": (
             [int(value) for value in args.k_values.split(",")]
             if args.k_values
@@ -517,6 +586,22 @@ def main(argv: list[str] | None = None) -> int:
 
     embedder = SentenceTransformer(settings["embed_model"], device=settings["device"])
     collection_name = collection_name_for(settings["collection_prefix"], settings["embed_model"])
+    bm25 = build_bm25_index(config) if settings["hybrid"] else None
+    reranker = build_reranker(config, model_name=args.rerank_model) if settings["rerank"] else None
+    if bm25:
+        LOGGER.info(
+            "Hybrid retrieval: dense top-%d + BM25 top-%d, RRF k=%d, fused to %d",
+            settings["dense_top_k"],
+            settings["lexical_top_k"],
+            settings["rrf_k"],
+            settings["candidate_depth"],
+        )
+    if reranker:
+        LOGGER.info(
+            "Reranking enabled: %s over %d candidates",
+            reranker.model_name,
+            settings["rerank_depth"],
+        )
 
     client = QdrantClient(path=settings["qdrant_path"])
     try:
@@ -524,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
             LOGGER.error("Collection %s does not exist. Run embed_index first.", collection_name)
             return 1
         results = [
-            evaluate_item(item, client, collection_name, embedder, settings)
+            evaluate_item(item, client, collection_name, embedder, settings, reranker, bm25)
             for item in tqdm(items, desc="Retrieving", unit="q")
         ]
     finally:
@@ -536,6 +621,22 @@ def main(argv: list[str] | None = None) -> int:
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "tag": args.tag,
             "provisional": bool(args.allow_unverified),
+            "rerank": settings["rerank"],
+            "rerank_depth": settings["rerank_depth"],
+            "hybrid": settings["hybrid"],
+            "hybrid_config": (
+                {
+                    "dense_top_k": settings["dense_top_k"],
+                    "lexical_top_k": settings["lexical_top_k"],
+                    "rrf_k": settings["rrf_k"],
+                }
+                if settings["hybrid"]
+                else None
+            ),
+            "rerank_model": (reranker.model_name if reranker else None),
+            "rerank_ms_median": (
+                round(statistics.median([r.rerank_ms for r in results]), 2) if reranker else 0.0
+            ),
             "embed_model": settings["embed_model"],
             "collection": collection_name,
             "retrieval_top_k": settings["retrieval_top_k"],

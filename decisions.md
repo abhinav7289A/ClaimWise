@@ -749,7 +749,206 @@ one condition and correct in the other.
 
 # Phase 2 — Advanced RAG
 
-⏳ Not started. Open items inherited from Phase 1:
+## Decisions
+
+### D-15 · Reranking first, chosen from measurement
+**Date:** 2026-08-12
+
+**Context.** CLAUDE.md lists Phase 2's techniques in an order. Which to do first
+should come from data.
+
+**Evidence.** Phase 1's depth run: hit@5 **0.694** against recall@50 **0.953**.
+For 95% of questions the correct page was already retrieved and merely ranked
+too low; only 4 of 85 were unreachable. Reranking's addressable gap was 26
+points; hybrid search's was 5.
+
+**Decision.** Cross-encoder reranking (`BAAI/bge-reranker-base`) first.
+
+**Outcome.** hit@5 0.694 → **0.812**. Confirmed.
+
+---
+
+### D-16 · Candidate depth 20, not 50
+**Date:** 2026-08-13
+
+**Context.** Depth was left as a swept parameter because evaluating it is free.
+
+**Result — deeper candidates made things worse:**
+
+| Depth | hit@5 | Ceiling | % of ceiling | ms/pair |
+|---|---|---|---|---|
+| 10 | 0.776 | 0.800 | **97%** | 190 |
+| **20** | **0.812** | 0.894 | 91% | 200* |
+| 30 | 0.800 | 0.920 | 87% | 206 |
+| 50 | 0.788 | 0.953 | 83% | 200 |
+
+\* the depth-20 run recorded 481 ms/pair. I attributed this to transient machine
+contention and predicted a clean re-run would show ~200 ms/pair. **Wrong** — the
+re-run reproduced it at 510 ms/pair. The real explanation is **thermal
+throttling under sustained load**: a single query reranks 20 pairs in 3.6 s
+(180 ms/pair) while 100 back-to-back queries average 10.2 s (510 ms/pair). Both
+numbers are real and measure different things — the first is user-facing
+latency, the second applies only to eval sweeps.
+
+**Why deeper is worse.** Every extra candidate is another chance for the
+cross-encoder to promote a wrong chunk above the right one. Its precision
+degrades faster than the ceiling rises — efficiency falls monotonically from
+97% to 83%. The opposite of "retrieve more, rerank harder" intuition.
+
+**Decision.** Depth 20.
+
+**Why quality and not CPU latency drove this.** CLAUDE.md serves the reranker
+via `@spaces.GPU` in Phase 5, where 20 pairs costs tens of milliseconds. Tuning
+depth around a laptop CPU would optimise for an environment the product never
+runs in.
+
+---
+
+### D-17 · Hybrid search REJECTED — a measured negative result
+**Date:** 2026-08-14
+
+**Context.** Reranking hit a structural ceiling: a cross-encoder reorders the
+candidate pool but cannot add to it, so at depth 20 the nine remaining misses
+were invisible to it. Hybrid retrieval (BM25 + dense, fused by Reciprocal Rank
+Fusion) was the obvious way to raise pool recall. It does not work here.
+
+**Result — every configuration lost ground against dense alone:**
+
+| Retrieval | Lexical width | Pool depth | Pool recall | Misses | Recovered | Evicted | Net |
+|---|---|---|---|---|---|---|---|
+| **dense** | — | 20 | **0.894** | 9 | — | — | — |
+| hybrid RRF | 30 | 20 | 0.859 | 12 | 3 | 6 | **−3** |
+| hybrid RRF | 10 | 20 | 0.871 | 11 | 3 | 5 | **−2** |
+| hybrid RRF | 5 | 20 | 0.871 | 11 | 1 | 3 | **−2** |
+| **dense** | — | 30 | **0.906** | 8 | — | — | — |
+| hybrid RRF | 30 | 30 | 0.894 | 9 | 3 | 4 | **−1** |
+
+End-to-end with reranking at depth 20, hybrid was an exact wash on hit@5
+(0.8118 → 0.8118), slightly better on MRR (0.6158 → 0.6177), worse on hit@10
+(0.882 → 0.824) and worse on exact-chunk hit@5 (0.765 → 0.718 — BM25 often
+matches a *neighbouring* chunk on the correct page). p95 latency doubled,
+11,496 → 23,415 ms.
+
+**Root cause — fusion is a displacement trade, not an addition.** The pool is
+fixed-size, so every lexical candidate admitted evicts a dense one. BM25's
+recoveries are real and repeatable (g-002, g-012, g-041 in nearly every config;
+g-076 at depth 30) but its evictions are equally consistent (g-059, g-067,
+g-074, g-078). If fusion could keep both, pool recall at depth 30 would be
+~0.94.
+
+It cannot, because **the reranker's precision — not pool recall — is the
+binding constraint** (D-16: 97% efficiency at depth 10 falling to 83% at depth
+50). Fusion buys recall only by widening the pool, and widening is exactly what
+degrades the cross-encoder. The two levers available (narrow BM25, widen the
+pool) both converge toward dense-only, and dense-only wins at every depth.
+
+**Why weighted RRF was not attempted.** As the lexical weight approaches zero,
+weighted RRF *becomes* dense-only. The measured results are monotone in
+eviction pressure (−3 → −2 → −1), so the optimum of that weight sweep sits at
+the boundary. It would cost a code change and three more runs to rediscover the
+baseline.
+
+**Decision.** `hybrid.enabled` stays `false`. The module is kept, not deleted —
+it is a working, documented implementation and the evidence behind this entry.
+
+**What survives.** Two findings, both routed elsewhere rather than discarded:
+
+1. The per-type split is consistent across all four runs — life gains, health
+   and home lose (see P-17). That is a *routing* problem, not a fusion-weight
+   problem; it belongs to Phase 3's router or technique 5's metadata filtering.
+2. g-076 is reachable by BM25 though not densely, which partially resolves the
+   false-confidence case left open in P-14.
+
+**Cost.** ~3 hours including the sweep. A negative result that closes off a
+plausible direction with evidence is worth recording, not hiding (CLAUDE.md §6).
+
+---
+
+## Problems
+
+### P-14 · RESOLVED — the cross-encoder *is* a usable confidence signal
+
+The open finding recorded in Phase 1 listed cross-encoder relevance as a
+candidate replacement for the unusable bi-encoder score. Now measured on the
+same 15 negatives:
+
+| Stage | Mean top-1 on negatives | Usable as confidence? |
+|---|---|---|
+| Bi-encoder cosine | **0.6687** | No — inside the positives' range |
+| Cross-encoder | **0.0985** | **Yes** — 14 of 15 below 0.22, median 0.017 |
+
+Genuine hits score 0.85–0.99. Low-scoring *positives* are largely the retrieval
+failures — g-017 (0.030), g-058 (0.171), g-041 (0.174) — which is the desired
+behaviour: a confidence gate needn't distinguish "no answer exists" from "I
+couldn't find it", since both warrant the same action.
+
+**Carried to Phase 3.** The confidence gate should threshold cross-encoder
+top-1, around 0.2–0.25 on this evidence. One known false-confidence case
+remains: g-076 scores 0.997 while being a complete retrieval miss.
+
+### P-11 · RESOLVED — reranking fixes the phrasing instability
+
+The Phase 1 weakness (identical question, different age, correct clause dropped
+from the top-5) is fixed by reranking. Same question, one flag apart:
+
+| | Retrieved pages | Answer |
+|---|---|---|
+| `--no-rerank` | 1, 3, 20, 20, 1 | *refused* |
+| reranked, depth 20 | 3, **39**, 1, 12, 20 | "There is no co-payment specified for someone who joins at age 45 **[p.39]**" |
+
+The clause returns at rank 2, and the answer is correct in the *inverse*
+direction — the 10% co-pay applies at entry age 61+, so someone joining at 45
+owes nothing. The model applied the threshold rather than echoing it.
+
+The secondary observation from P-11 also resolved: the baseline returned only 3
+distinct pages across 5 slots (`1, 3, 20, 20, 1`); reranked, all 5 are distinct.
+
+### P-17 · Reranking regresses the life policy
+**Status:** 🔶 Open
+
+Per-type page hit@5 across the sweep:
+
+| Policy type | Baseline | d10 | d20 | d30 | d50 |
+|---|---|---|---|---|---|
+| health | 0.674 | — | **0.861** | 0.837 | 0.814 |
+| home | 0.762 | — | **0.905** | 0.905 | 0.905 |
+| life | **0.667** | 0.714 | 0.619 | 0.619 | 0.619 |
+
+Health gains +18.7 and home +14.3, but **life loses 4.8 points** at every depth
+≥20. It is the outlier document in every respect: 11,639 chars/page against
+~2,600–5,900, dense multi-column fine print, and only 8 pages.
+
+Hypotheses, untested: its chunks span more topics each, so no chunk is strongly
+"about" the question; or the cross-encoder's training distribution suits prose
+better than dense clause lists.
+
+**Update 2026-08-14 — the lexical hypothesis was right, and it is the only
+place hybrid helped.** With BM25 fused in at depth 20 plus reranking:
+
+| Policy type | dense + rerank | hybrid + rerank | Δ |
+|---|---|---|---|
+| health | 0.8605 | 0.8140 | −4.7 |
+| home | 0.9048 | 0.9048 | 0.0 |
+| life | 0.6190 | **0.7143** | **+9.5** |
+
+The direction is consistent across all four hybrid configurations swept in
+D-17, so this is a property of the document rather than run-to-run noise. It is
+not enough to save hybrid globally — the aggregate is a wash and pool recall
+falls — but it means the life policy wants a *different retrieval strategy*,
+not a different global setting.
+
+**Carried to Phase 3 / technique 5.** Per-policy-type retrieval routing, where
+`policy_type=life` fuses lexically and everything else does not. Deliberately
+not done inside Phase 2's hybrid experiment: it would mix a routing change into
+a fusion measurement and break the one-change-one-eval attribution rule.
+
+**Still open for technique 3.** The first hypothesis — chunks spanning too many
+topics at 11,639 chars/page — is precisely what parent-document retrieval
+addresses, and remains the more likely root cause of the 0.619 baseline.
+
+---
+
+Open items inherited from Phase 1:
 [P-9](#p-9--column-scrambling-visible-in-extracted-text) ·
 [P-11](#p-11--retrieval-instability-across-question-phrasings) ·
 [P-12](#p-12--pdf-hard-line-wraps-survive-into-answers) ·

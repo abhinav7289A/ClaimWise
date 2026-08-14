@@ -1,0 +1,79 @@
+{
+  "positives": 85,
+  "negatives": 15,
+  "hit_at_k_page": {
+    "1": 0.4353,
+    "3": 0.5647,
+    "5": 0.6353,
+    "10": 0.7765,
+    "20": 0.8706
+  },
+  "hit_at_k_chunk": {
+    "1": 0.2941,
+    "3": 0.4588,
+    "5": 0.5059,
+    "10": 0.6471,
+    "20": 0.7765
+  },
+  "hit_at_k_loose": {
+    "1": 0.4353,
+    "3": 0.5647,
+    "5": 0.6471,
+    "10": 0.8235,
+    "20": 0.9059
+  },
+  "mrr": 0.5279,
+  "page_recall_at_5": 0.6353,
+  "latency_ms": {
+    "median": 77.11,
+    "p95": 100.14
+  },
+  "by_policy_type": {
+    "health": {
+      "items": 43,
+      "hit_at_5_page": 0.6279,
+      "mrr": 0.5665
+    },
+    "home": {
+      "items": 21,
+      "hit_at_5_page": 0.7619,
+      "mrr": 0.5512
+    },
+    "life": {
+      "items": 21,
+      "hit_at_5_page": 0.5238,
+      "mrr": 0.4255
+    }
+  },
+  "negatives_mean_top_score": 0.0283,
+  "missed_item_ids": [
+    "g-009",
+    "g-017",
+    "g-030",
+    "g-058",
+    "g-059",
+    "g-067",
+    "g-069",
+    "g-074",
+    "g-076",
+    "g-077",
+    "g-078"
+  ],
+  "created_at": "2026-08-14T11:21:35+00:00",
+  "tag": "hy-lex10-pool",
+  "provisional": true,
+  "rerank": false,
+  "rerank_depth": null,
+  "hybrid": true,
+  "hybrid_config": {
+    "dense_top_k": 30,
+    "lexical_top_k": 10,
+    "rrf_k": 60
+  },
+  "rerank_model": null,
+  "rerank_ms_median": 0.0,
+  "embed_model": "BAAI/bge-small-en-v1.5",
+  "collection": "claimwise__baai_bge_small_en_v1_5",
+  "retrieval_top_k": 10,
+  "golden_set": "data/eval/golden.jsonl"
+}

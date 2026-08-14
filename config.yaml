@@ -144,6 +144,44 @@ rag:
   # becomes a training target for Phase 4's "answer not in context" negatives.
   refusal_text: "That isn't covered in the policy documents you've uploaded."
 
+rerank:
+  # Phase 2, technique 1. Off by default so the Phase 1 baseline stays
+  # reproducible — the method is one change plus one re-eval, which requires
+  # being able to reproduce the "before" at any time.
+  enabled: true
+  # bge-reranker-base: 278M params, the standard cross-encoder pairing for bge
+  # embeddings and CPU-feasible. v2-m3 is stronger but ~2x slower; ms-marco
+  # MiniLM is far faster but trained on web QA rather than dense legal prose.
+  model_name: BAAI/bge-reranker-base
+  device: cpu
+  batch_size: 16
+  # Swept empirically (D-16). Deeper candidates raise the ceiling but LOWER the
+  # result — every extra candidate is another chance to promote a wrong chunk,
+  # and the cross-encoder's precision degrades faster than the ceiling rises:
+  #
+  #   depth 10 -> hit@5 0.776 (97% of its 0.800 ceiling)
+  #   depth 20 -> hit@5 0.812 (91% of 0.894)   <- best absolute
+  #   depth 30 -> hit@5 0.800 (87% of 0.920)
+  #   depth 50 -> hit@5 0.788 (83% of 0.953)
+  candidate_depth: 20
+
+hybrid:
+  # Phase 2, technique 2. Off by default so each technique is one change plus
+  # one re-eval and the previous result stays reproducible.
+  enabled: false
+  # Candidates each retriever contributes before fusion. Deliberately wider
+  # than the reranker's depth: fusion narrows, then the cross-encoder narrows
+  # again. Raising pool recall compounds — better candidates in, better
+  # reranked output out.
+  dense_top_k: 30
+  lexical_top_k: 30
+  # Reciprocal Rank Fusion constant (Cormack et al. 2009). Fusing by RANK
+  # rather than score avoids normalising two incomparable scales: cosine sits
+  # in ~0.4-0.9 while BM25 is unbounded and corpus-dependent. 60 is the
+  # standard default and robust across corpora.
+  rrf_k: 60
+  chunks_path: data/processed/chunks.jsonl
+
 generator:
   # The swappable slot. Phases 1-3 point this at a hosted free model; Phase 5
   # points it at the fine-tuned Qwen endpoint. Nothing upstream changes,

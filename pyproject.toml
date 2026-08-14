@@ -53,6 +53,11 @@ dependencies = [
     # version was missing modules it expected. Pinned explicitly so the
     # dependency is visible rather than a surprise at import time.
     "langchain-community>=0.3",
+    # rank-bm25: a small, dependency-free BM25 implementation. Chosen over
+    # Qdrant sparse vectors because it needs no re-index and no support for
+    # sparse vectors in embedded local mode, and over Elasticsearch because
+    # running a JVM service for 653 documents is absurd.
+    "rank-bm25>=0.2.2",
 ]
 
 [tool.uv]

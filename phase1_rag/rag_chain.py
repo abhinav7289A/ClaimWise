@@ -310,8 +310,9 @@ def answer_question(
     settings: dict[str, Any],
     insurer: str | None = None,
     policy_type: str | None = None,
+    reranker: Any = None,
 ) -> RagAnswer:
-    """Run the full retrieve → prompt → generate → verify cycle.
+    """Run the full retrieve → (rerank) → prompt → generate → verify cycle.
 
     Args:
         question: The user's question.
@@ -322,21 +323,30 @@ def answer_question(
         settings: Resolved rag/embed settings.
         insurer: Optional metadata filter.
         policy_type: Optional metadata filter.
+        reranker: Optional Phase 2 cross-encoder. Injected rather than imported
+            so this module stays independent of `phase2_advanced`, which imports
+            from here — the dependency runs one way only.
 
     Returns:
         The answer with its retrieved context, citation check and timings.
     """
+    # With a reranker, the bi-encoder fetches a wider candidate pool and the
+    # cross-encoder narrows it to top_k. Without one, it fetches top_k directly.
+    fetch_k = settings["candidate_depth"] if reranker else settings["top_k"]
+
     retrieval_started = time.perf_counter()
     chunks = retrieve(
         client,
         collection_name=collection_name,
         embedder=embedder,
         question=question,
-        top_k=settings["top_k"],
+        top_k=fetch_k,
         query_prefix=settings["query_prefix"],
         normalize=settings["normalize"],
         search_filter=build_search_filter(settings["user_id"], insurer, policy_type),
     )
+    if reranker is not None:
+        chunks = reranker.rerank(question, chunks, top_k=settings["top_k"])
     retrieval_seconds = time.perf_counter() - retrieval_started
 
     if not chunks:
@@ -397,6 +407,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--policy-type", default=None, help="Restrict retrieval to one policy type."
     )
     parser.add_argument(
+        "--no-rerank", action="store_true", help="Disable reranking for this run."
+    )
+    parser.add_argument(
         "--show-chunks", action="store_true", help="Print the retrieved passages."
     )
     parser.add_argument("--json", action="store_true", help="Emit the full result as JSON.")
@@ -426,6 +439,8 @@ def resolve_settings(config: dict[str, Any], args: argparse.Namespace) -> dict[s
         "qdrant_path": cfg_get(config, "index.path", "qdrant_storage"),
         "collection_prefix": cfg_get(config, "index.collection_prefix", "claimwise"),
         "user_id": args.user_id or cfg_get(config, "index.default_user_id", "local-dev"),
+        "rerank": cfg_get(config, "rerank.enabled", False),
+        "candidate_depth": cfg_get(config, "rerank.candidate_depth", 20),
     }
 
 
@@ -449,6 +464,16 @@ def main(argv: list[str] | None = None) -> int:
 
     embedder = SentenceTransformer(settings["embed_model"], device=settings["device"])
     generator = build_generator(config, provider=args.provider, model=args.model)
+
+    reranker = None
+    if settings["rerank"] and not args.no_rerank:
+        # Imported here, not at module scope: phase2_advanced.rerank imports
+        # RetrievedChunk from this module, so a top-level import would be
+        # circular. The dependency is allowed to run one way only.
+        from phase2_advanced.rerank import build_reranker
+
+        reranker = build_reranker(config)
+
     collection_name = collection_name_for(
         settings["collection_prefix"], settings["embed_model"]
     )
@@ -470,6 +495,7 @@ def main(argv: list[str] | None = None) -> int:
             settings=settings,
             insurer=args.insurer,
             policy_type=args.policy_type,
+            reranker=reranker,
         )
     finally:
         client.close()
@@ -502,6 +528,10 @@ def main(argv: list[str] | None = None) -> int:
     print(f"tokens             : {result.prompt_tokens} in / "
           f"{result.completion_tokens} out = {result.total_tokens}")
     print(f"served by          : {result.provider}/{result.model}")
+    print(
+        f"reranked           : {bool(reranker)}"
+        + (f" (depth {settings['candidate_depth']})" if reranker else "")
+    )
 
     if result.invalid_citations:
         LOGGER.error(

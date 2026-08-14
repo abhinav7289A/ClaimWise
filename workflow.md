@@ -78,6 +78,22 @@ Its real job is avoiding the circularity trap: an LLM asked to write a question 
 
 ---
 
+## `phase2_advanced/` — advanced retrieval
+
+### `phase2_advanced/rerank.py`
+Cross-encoder reranking, Phase 2's first technique. Wraps `BAAI/bge-reranker-base` to score every (question, chunk) pair and reorder the candidate list. Where a bi-encoder embeds question and chunk *independently* — fast, because chunk vectors are computed once at upload, but the model never sees the two together — a cross-encoder concatenates them and runs full attention across the pair, reading the question while reading the passage. That's roughly 100× more expensive per pair and cannot precompute anything, which is exactly why it runs as a second stage over ~30 candidates rather than all 653.
+
+Chosen as the first technique from measurement rather than intuition: Phase 1 recorded hit@5 0.694 against recall@50 0.953, so for 95% of questions the correct page is already retrieved and merely ranked too low. Reranking cannot invent results, so its ceiling *is* the recall of the candidate set — which makes candidate depth a real tunable, swept empirically since evaluation is free. Reranking reorders the whole candidate list rather than truncating it, so hit@k stays computable at every k and before/after comparison is exact. Runnable standalone to print the before/after ordering for one question with rank-movement arrows, so the effect is visible before committing to a full evaluation.
+
+### `phase2_advanced/hybrid.py`
+Hybrid retrieval — Phase 2's second technique. Builds an in-memory BM25 index over `chunks.jsonl`, runs it alongside dense search, and fuses the two rankings with Reciprocal Rank Fusion. Exists because reranking hit a structural ceiling: a cross-encoder reorders the candidate pool but cannot add to it, so the nine remaining misses at depth 20 were invisible to it. Raising pool recall compounds — better candidates in, better reranked output out.
+
+Dense and lexical retrieval fail in opposite directions: embeddings capture meaning but blur exact tokens (P-11, where "co-payment" appeared verbatim in the target chunk and dense search still missed it), while BM25 nails rare exact terms and understands nothing. Fusion is by **rank, not score**, because cosine lives in ~0.4–0.9 while BM25 is unbounded and corpus-dependent — there is no principled shared scale, so RRF discards magnitudes and sums `1/(k+rank)` across retrievers. Runnable standalone to print dense, lexical and fused rankings side by side with an overlap count, so it's immediately visible whether fusion contributes anything or is pure overhead. Note the security caveat documented in the module: dense retrieval filters `user_id` inside Qdrant's traversal, but this BM25 index has no such boundary — a production deployment must build it per user or filter by owned `doc_id` via `allowed_doc_ids`.
+
+**Measured and rejected — `hybrid.enabled` is `false` (D-17).** Kept in the repo because it is a working implementation and the evidence behind the decision, not dead code. Fusion turned out to be a *displacement* trade rather than an addition: the candidate pool is fixed-size, so every lexical candidate admitted evicts a dense one, and across four configurations BM25 recovered 1–3 items while evicting 3–6. Pool recall fell 0.894 → 0.859 at depth 20 and end-to-end hit@5 was an exact wash. The root cause is that the *reranker's precision*, not pool recall, is the binding constraint — fusion buys recall only by widening the pool, which is precisely what degrades the cross-encoder. One finding survived: the life policy gains +9.5 points from lexical matching, which is a routing question carried to Phase 3, not a global fusion setting.
+
+---
+
 ## `evals/` — evaluation harnesses
 
 ### `evals/retrieval_metrics.py`
@@ -137,5 +153,7 @@ Listed for orientation only — these files do not exist yet.
 
 | File | Planned role |
 |---|---|
-| `metrics/failure_analysis_p1.md` | Phase 1 exit criterion: the 10 worst failures, analysed |
-| `phase2_advanced/rerank.py` | Cross-encoder reranking — Phase 2's highest-value first move |
+| `metrics/failure_analysis_p1.md` | Phase 1 exit criterion: the 10 worst failures, analysed. Still outstanding. |
+| `phase2_advanced/parent_docs.py` | Technique 3: parent-document / small-to-big retrieval — retrieve on small chunks, hand the reranker and the generator the larger surrounding block |
+| `phase2_advanced/query_rewrite.py` | Technique 4: query rewriting / multi-query |
+| `docs/blog/phase2.md` | Phase 2 write-up, including the hybrid negative result |
