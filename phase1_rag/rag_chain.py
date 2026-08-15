@@ -319,8 +319,9 @@ def answer_question(
     insurer: str | None = None,
     policy_type: str | None = None,
     reranker: Any = None,
+    parents: Any = None,
 ) -> RagAnswer:
-    """Run the full retrieve → (rerank) → prompt → generate → verify cycle.
+    """Run the full retrieve → (rerank) → (expand) → prompt → generate → verify cycle.
 
     Args:
         question: The user's question.
@@ -334,6 +335,10 @@ def answer_question(
         reranker: Optional Phase 2 cross-encoder. Injected rather than imported
             so this module stays independent of `phase2_advanced`, which imports
             from here — the dependency runs one way only.
+        parents: Optional Phase 2 `ParentStore`. When present, chunks carrying a
+            `parent_id` are replaced by their enclosing block before the prompt
+            is assembled; chunks without one pass through. Injected for the same
+            reason as `reranker`.
 
     Returns:
         The answer with its retrieved context, citation check and timings.
@@ -353,8 +358,16 @@ def answer_question(
         normalize=settings["normalize"],
         search_filter=build_search_filter(settings["user_id"], insurer, policy_type),
     )
+    # Order is load-bearing and matches the evaluated pipeline exactly (D-18):
+    # rerank the small children first — bge-reranker-base truncates past 512
+    # tokens, so scoring 2,000-char parents would clip their endings — then
+    # expand the winners, then truncate. Truncating before expansion would let
+    # deduplication drop the prompt below top_k passages.
     if reranker is not None:
-        chunks = reranker.rerank(question, chunks, top_k=settings["top_k"])
+        chunks = reranker.rerank(question, chunks)
+    if parents is not None:
+        chunks = parents.expand(chunks)
+    chunks = chunks[: settings["top_k"]]
     retrieval_seconds = time.perf_counter() - retrieval_started
 
     if not chunks:
@@ -445,7 +458,21 @@ def resolve_settings(config: dict[str, Any], args: argparse.Namespace) -> dict[s
         "normalize": cfg_get(config, "embed.normalize", True),
         "device": cfg_get(config, "embed.device", "cpu"),
         "qdrant_path": cfg_get(config, "index.path", "qdrant_storage"),
-        "collection_prefix": cfg_get(config, "index.collection_prefix", "claimwise"),
+        # The adopted chunking strategy decides which collection holds the
+        # vectors. Resolving it here rather than at the call site means every
+        # caller — CLI, eval harness, Phase 5 server — measures and serves the
+        # same pipeline. run_ragas.py silently evaluating a different pipeline
+        # from the configured one is a mistake this project has already made
+        # once (P-18).
+        "chunk_policy": cfg_get(config, "chunk_policy.enabled", False),
+        "collection_prefix": (
+            cfg_get(config, "chunk_policy.collection_prefix", "claimwise_mx")
+            if cfg_get(config, "chunk_policy.enabled", False)
+            else cfg_get(config, "index.collection_prefix", "claimwise")
+        ),
+        "parents_path": cfg_get(
+            config, "chunk_policy.parents_path", "data/processed/mixed_parents.jsonl"
+        ),
         "user_id": args.user_id or cfg_get(config, "index.default_user_id", "local-dev"),
         "rerank": cfg_get(config, "rerank.enabled", False),
         "candidate_depth": cfg_get(config, "rerank.candidate_depth", 20),
@@ -482,6 +509,12 @@ def main(argv: list[str] | None = None) -> int:
 
         reranker = build_reranker(config)
 
+    parents = None
+    if settings["chunk_policy"]:
+        from phase2_advanced.parent_docs import load_parent_store
+
+        parents = load_parent_store(config, parents_path=Path(settings["parents_path"]))
+
     collection_name = collection_name_for(
         settings["collection_prefix"], settings["embed_model"]
     )
@@ -504,6 +537,7 @@ def main(argv: list[str] | None = None) -> int:
             insurer=args.insurer,
             policy_type=args.policy_type,
             reranker=reranker,
+            parents=parents,
         )
     finally:
         client.close()

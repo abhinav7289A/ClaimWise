@@ -108,6 +108,13 @@ Selects on measured density rather than document name deliberately. Writing `lif
 
 A build-time policy rather than a query-time router: everything lands in one collection, so retrieval needs no routing logic, no second search, and no reconciling scores across separately-built indexes — the incomparable-scales problem that forced rank-based fusion in D-17. A router can be wrong at query time; a build-time policy has no query-time decision to get wrong. Mixing granularities works because expansion is opt-in per chunk — dense documents produce children carrying `parent_id`, sparse ones produce flat chunks with none, and `ParentStore.expand()` passes those through untouched. Exits non-zero if every document selects the same strategy, since the policy only earns its complexity when documents actually differ. Also applies the `min_chunk_chars` filter that `parent_docs.py` omits, which is what produced 6-character children in that module's first build.
 
+### `phase2_advanced/full_context.py`
+The Phase 2 blog experiment — answers the golden questions with the entire corpus in one prompt, no retrieval, no chunking, no reranking. Tests the claim that long context windows make RAG obsolete: at 491,986 characters (~123K tokens) the whole corpus genuinely fits a 262K window, so the question is not *can* you but *should* you. Only the retrieval stage differs from the RAG path — same system prompt, same citation contract — so the comparison isolates it.
+
+Reports four axes because accuracy alone hides the trade: citation correctness against ground truth, tokens per query (~123,000 against RAG's ~1,475, roughly 80× on every question forever), latency, and cost. Deliberately surfaces the approach's one real advantage rather than burying it — stuffing cannot suffer a retrieval miss, so the nine questions Phase 2 never retrieves correctly are all *visible* to it, and if it answers them that belongs in the write-up. Note it cannot reuse `verify_citations`: with every page in context no citation is ever "fabricated" relative to a retrieved set, which is itself a finding — the free citation-validity signal the RAG path gets for nothing is unavailable to a stuffing architecture.
+
+Prints a cost estimate before spending anything and refuses to run more than ten questions without `--yes`, the same discipline CLAUDE.md imposes on Modal training scripts, because the failure mode is a mistyped `--limit` spending real money before a single line is printed.
+
 ---
 
 ## `evals/` — evaluation harnesses

@@ -592,6 +592,15 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info("Reranking disabled — measuring the dense top-%d pipeline.",
                     rag_settings["top_k"])
 
+    parents = None
+    if rag_settings["chunk_policy"]:
+        from phase2_advanced.parent_docs import load_parent_store
+
+        parents = load_parent_store(config, parents_path=Path(rag_settings["parents_path"]))
+        LOGGER.info(
+            "Chunk policy active: %d parents, collection %s", len(parents), collection_name
+        )
+
     answered: list[AnsweredItem] = []
     client = QdrantClient(path=rag_settings["qdrant_path"])
     try:
@@ -609,6 +618,7 @@ def main(argv: list[str] | None = None) -> int:
                     generator=generator,
                     settings=rag_settings,
                     reranker=reranker,
+                    parents=parents,
                 )
             except RuntimeError as error:
                 LOGGER.error("Item %s failed: %s", item["id"], error)
@@ -671,7 +681,9 @@ def main(argv: list[str] | None = None) -> int:
             if reranker
             else " (no rerank)"
         )
+        + (" + chunk-policy/parent-expansion" if parents else "")
     )
+    print(f"collection          : {collection_name}")
     print(f"answered            : {len(answered)} ({metrics['positives']} pos / {metrics['negatives']} neg)")
     print(f"citation coverage   : {metrics['citation_coverage']:.3f}")
     print(f"citation validity   : {metrics['citation_validity']:.3f}")
@@ -729,6 +741,8 @@ def main(argv: list[str] | None = None) -> int:
         "rerank": bool(reranker),
         "rerank_model": reranker.model_name if reranker else None,
         "rerank_depth": rag_settings["candidate_depth"] if reranker else None,
+        "chunk_policy": bool(parents),
+        "collection": collection_name,
         "free_metrics": metrics,
         "ragas": ragas_scores,
     }

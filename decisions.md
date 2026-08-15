@@ -995,6 +995,47 @@ elsewhere than they gain.
 
 ---
 
+### D-20 · Query rewriting (technique 4) — deliberately not built
+**Date:** 2026-08-16
+
+**Decision.** Skipped. Recorded as a decision rather than an omission, because
+a technique CLAUDE.md lists and this project does not ship needs a reason.
+
+**Why.** Three arguments, in descending strength:
+
+1. **The eval set is constructed to defeat it.** Query rewriting mainly fixes
+   vocabulary mismatch between question and passage. `build_eval_set.py`
+   deliberately paraphrases that overlap away and rejects questions whose
+   content words overlap the source chunk beyond a threshold — precisely to stop
+   hit@5 measuring string matching. The mechanism rewriting exploits is
+   therefore largely *absent by construction*. A gain here would be hard to
+   trust and a null result hard to interpret.
+2. **It costs LLM calls per query, and the eval loop is already the
+   bottleneck.** Every other Phase 2 technique is free and deterministic:
+   ~30 seconds for 100 questions. Multi-query adds a generation call before
+   every retrieval, which on the current free tier means ~53 s median per query
+   (2026-08-15 measurement). It would move Phase 2's inner loop from seconds to
+   over an hour.
+3. **The exit criterion is already met** — +17.7 points against a ≥15 target
+   (D-19).
+
+**The honest counter-argument.** Pool recall has been 0.894 since Phase 1 and
+*no technique has moved it*: the same nine items are missed by dense retrieval,
+by four hybrid configurations, and by the adopted chunk policy. Query rewriting
+is a **recall** technique and would be the first genuine attempt at those nine.
+That is a real argument for building it.
+
+It is outweighed by D-17's lesson: a recall technique feeding a
+precision-bound reranker made things *worse*, not better, because the pool is
+fixed-size and every admission is an eviction. Rewriting would face the same
+structure.
+
+**If revisited**, scope it narrowly at those nine items rather than as a general
+improvement, and measure pool recall rather than hit@5 — hit@5 cannot show a
+recall gain that the reranker then fails to convert.
+
+---
+
 ## Problems
 
 ### P-14 · RESOLVED — the cross-encoder *is* a usable confidence signal
