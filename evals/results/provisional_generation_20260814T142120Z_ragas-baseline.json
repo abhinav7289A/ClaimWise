@@ -1,0 +1,79 @@
+{
+  "created_at": "2026-08-14T14:21:20+00:00",
+  "tag": "ragas-baseline",
+  "provisional": true,
+  "generator": {
+    "provider": "hf",
+    "model": "meta-llama/Llama-3.3-70B-Instruct"
+  },
+  "top_k": 5,
+  "free_metrics": {
+    "positives": 85,
+    "negatives": 15,
+    "citation_coverage": 0.9744,
+    "citation_validity": 0.9474,
+    "fabricated_citation_items": [
+      "g-043",
+      "g-056",
+      "g-057",
+      "g-075"
+    ],
+    "positives_with_evidence": 59,
+    "positives_without_evidence": 26,
+    "false_refusal_rate": 0.0169,
+    "false_refusal_items": [
+      "g-008"
+    ],
+    "correct_refusal_rate": 0.2308,
+    "ungrounded_answer_rate": 0.7692,
+    "ungrounded_answer_items": [
+      "g-001",
+      "g-006",
+      "g-007",
+      "g-009",
+      "g-012",
+      "g-017",
+      "g-022",
+      "g-030",
+      "g-038",
+      "g-040",
+      "g-041",
+      "g-043",
+      "g-058",
+      "g-059",
+      "g-067",
+      "g-069",
+      "g-074",
+      "g-076",
+      "g-077",
+      "g-078"
+    ],
+    "refusal_accuracy": 0.9333,
+    "missed_refusal_items": [
+      "g-097"
+    ],
+    "latency_seconds": {
+      "median": 1.837,
+      "p95": 3.569
+    },
+    "tokens": {
+      "prompt": 142207,
+      "completion": 5166,
+      "total": 147373,
+      "mean_per_query": 1474
+    },
+    "estimated_usd": 0.1032
+  },
+  "ragas": {
+    "scored_items": 78,
+    "ragas_version": "0.4.3",
+    "shims_applied": [
+      "langchain_community.chat_models.vertexai"
+    ],
+    "answer_relevancy": 0.8313,
+    "answer_relevancy_failed": 1,
+    "faithfulness": 0.842,
+    "faithfulness_failed": 24,
+    "_scored": 78
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "created_at": "2026-08-14T22:49:48+00:00",
+  "tag": "nim-baseline",
+  "provisional": true,
+  "generator": {
+    "provider": "nim",
+    "model": "google/gemma-4-31b-it"
+  },
+  "top_k": 5,
+  "rerank": false,
+  "rerank_model": null,
+  "rerank_depth": null,
+  "free_metrics": {
+    "positives": 84,
+    "negatives": 15,
+    "citation_coverage": 0.9865,
+    "citation_validity": 1.0,
+    "fabricated_citation_items": [],
+    "positives_with_evidence": 59,
+    "positives_without_evidence": 25,
+    "false_refusal_rate": 0.0169,
+    "false_refusal_items": [
+      "g-021"
+    ],
+    "correct_refusal_rate": 0.36,
+    "ungrounded_answer_rate": 0.64,
+    "ungrounded_answer_items": [
+      "g-001",
+      "g-006",
+      "g-007",
+      "g-009",
+      "g-017",
+      "g-022",
+      "g-030",
+      "g-038",
+      "g-040",
+      "g-041",
+      "g-058",
+      "g-059",
+      "g-067",
+      "g-074",
+      "g-076",
+      "g-078"
+    ],
+    "refusal_accuracy": 0.9333,
+    "missed_refusal_items": [
+      "g-091"
+    ],
+    "latency_seconds": {
+      "median": 24.759,
+      "p95": 155.503
+    },
+    "tokens": {
+      "prompt": 144411,
+      "completion": 9484,
+      "total": 153895,
+      "mean_per_query": 1554
+    },
+    "estimated_usd": 0.1077
+  },
+  "ragas": {
+    "scored_items": 74,
+    "ragas_version": "0.4.3",
+    "shims_applied": [
+      "langchain_community.chat_models.vertexai"
+    ],
+    "judge_provider": "nim",
+    "judge_model": "openai/gpt-oss-120b",
+    "judge_requests_per_minute": 30,
+    "judge_max_workers": 4,
+    "answer_relevancy": 0.7737,
+    "answer_relevancy_failed": 3,
+    "faithfulness": 0.7573,
+    "faithfulness_failed": 20,
+    "_scored": 74
+  }
+}

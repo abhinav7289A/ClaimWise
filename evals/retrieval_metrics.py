@@ -56,6 +56,7 @@ from common.config import DEFAULT_CONFIG_PATH, cfg_get, load_config
 from phase1_rag.embed_index import collection_name_for
 from phase1_rag.rag_chain import build_search_filter, retrieve
 from phase2_advanced.hybrid import BM25Index, build_bm25_index, hybrid_retrieve
+from phase2_advanced.parent_docs import ParentStore, load_parent_store
 from phase2_advanced.rerank import CrossEncoderReranker, build_reranker
 
 LOGGER = logging.getLogger("claimwise.retrieval_metrics")
@@ -104,6 +105,11 @@ class ItemResult:
     chunk_rank: int | None = None
     latency_ms: float = 0.0
     rerank_ms: float = 0.0
+    # Candidates surviving parent expansion. Expansion deduplicates, so N
+    # children can collapse to far fewer parents — shrinking the pool the
+    # reranker sees and confounding a comparison against a depth-20 dense run.
+    # Recorded so that shrinkage is visible rather than inferred.
+    candidates_after_expansion: int = 0
 
 
 def load_golden(path: Path, verified_only: bool) -> list[dict[str, Any]]:
@@ -165,6 +171,7 @@ def evaluate_item(
     settings: dict[str, Any],
     reranker: CrossEncoderReranker | None = None,
     bm25: BM25Index | None = None,
+    parents: ParentStore | None = None,
 ) -> ItemResult:
     """Retrieve for one golden item and record where the correct page landed.
 
@@ -210,11 +217,33 @@ def evaluate_item(
             search_filter=build_search_filter(settings["user_id"]),
         )
 
+    # Rerank the CHILDREN, then expand the winners. The first version did the
+    # reverse, on the reasoning that the cross-encoder should read what the
+    # generator reads. Measurement killed that argument twice over:
+    #
+    #   1. bge-reranker-base has a hard 512-token window (model_max_length=512).
+    #      Median parent is 1,780 chars ~ 445 tokens; with the query prepended
+    #      the upper half of parents were truncated, so the cross-encoder never
+    #      saw their endings — precisely where a qualifying clause tends to sit.
+    #   2. Expansion deduplicates, so 20 children collapsed to a median of 15
+    #      parents. The reranker got a smaller pool than the run it was being
+    #      compared against, confounding the comparison on top of degrading it.
+    #
+    # Reranking children first fixes both: 400-char children are ~100 tokens and
+    # fit comfortably, the pool stays the size it was asked to be, and the
+    # generator still receives whole parents. Ranking precision and context
+    # completeness turn out to want different stages, not the same one.
     rerank_ms = 0.0
     if reranker is not None:
         rerank_started = time.perf_counter()
         chunks = reranker.rerank(item["question"], chunks)
         rerank_ms = (time.perf_counter() - rerank_started) * 1000.0
+
+    # Expand the whole reordered list rather than truncating first, so hit@k
+    # stays computable at every k.
+    if parents is not None:
+        chunks = parents.expand(chunks)
+    candidates_after_expansion = len(chunks)
     latency_ms = (time.perf_counter() - started) * 1000.0
 
     pages = [chunk.page for chunk in chunks]
@@ -249,6 +278,7 @@ def evaluate_item(
         chunk_rank=first_rank(chunk_ids, {source_chunk_id}) if source_chunk_id else None,
         latency_ms=round(latency_ms, 2),
         rerank_ms=round(rerank_ms, 2),
+        candidates_after_expansion=candidates_after_expansion,
     )
 
 
@@ -478,6 +508,25 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--hybrid", action="store_true", help="Fuse BM25 with dense retrieval via RRF (Phase 2)."
     )
+    parser.add_argument(
+        "--parent-docs",
+        action="store_true",
+        help="Retrieve small children and expand to parent blocks (Phase 2 technique 3).",
+    )
+    parser.add_argument(
+        "--chunk-policy",
+        action="store_true",
+        help=(
+            "Density-selected per-document chunking (Phase 2 technique 5). Implies parent "
+            "expansion: dense documents produce children, sparse ones flat chunks that pass "
+            "through untouched."
+        ),
+    )
+    parser.add_argument(
+        "--collection-prefix",
+        default=None,
+        help="Override index.collection_prefix. Implied by --parent-docs.",
+    )
     # Sweepable from the CLI for the same reason rerank depth is: fusion is a
     # displacement trade — every lexical candidate admitted to a fixed-size pool
     # evicts a dense one — so the contribution widths are the parameter that
@@ -511,6 +560,28 @@ def resolve_settings(config: dict[str, Any], args: argparse.Namespace) -> dict[s
         "rerank": bool(args.rerank),
         "rerank_depth": rerank_depth if args.rerank else None,
         "hybrid": bool(args.hybrid),
+        # Both flags need parent expansion; they differ only in which corpus and
+        # collection they point at. --chunk-policy wins if both are passed.
+        "parent_docs": bool(args.parent_docs or args.chunk_policy),
+        "chunk_policy": bool(args.chunk_policy),
+        # Each implies its own collection: the parent tier only exists in the
+        # matching one, and pointing at the Phase 1 collection would retrieve
+        # chunks with no parent_id and silently degrade to plain dense search.
+        "collection_prefix_override": (
+            args.collection_prefix
+            or (
+                cfg_get(config, "chunk_policy.collection_prefix", "claimwise_mx")
+                if args.chunk_policy
+                else cfg_get(config, "parent_docs.collection_prefix", "claimwise_pd")
+                if args.parent_docs
+                else None
+            )
+        ),
+        "parents_path": (
+            Path(cfg_get(config, "chunk_policy.parents_path", "data/processed/mixed_parents.jsonl"))
+            if args.chunk_policy
+            else None
+        ),
         # Hybrid fuses down to candidate_depth, which the reranker then narrows.
         "candidate_depth": rerank_depth,
         "dense_top_k": args.dense_top_k or cfg_get(config, "hybrid.dense_top_k", 30),
@@ -585,9 +656,26 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     embedder = SentenceTransformer(settings["embed_model"], device=settings["device"])
-    collection_name = collection_name_for(settings["collection_prefix"], settings["embed_model"])
+    collection_name = collection_name_for(
+        settings["collection_prefix_override"] or settings["collection_prefix"],
+        settings["embed_model"],
+    )
     bm25 = build_bm25_index(config) if settings["hybrid"] else None
     reranker = build_reranker(config, model_name=args.rerank_model) if settings["rerank"] else None
+    parents = (
+        load_parent_store(config, parents_path=settings["parents_path"])
+        if settings["parent_docs"]
+        else None
+    )
+    if parents:
+        LOGGER.info(
+            "Parent-document retrieval: %d parents, collection %s", len(parents), collection_name
+        )
+        LOGGER.warning(
+            "exact-chunk hit@k is NOT comparable to a Phase 1 run — the golden set's "
+            "source_chunk_id refers to 1,000-char chunks that no longer exist. Compare "
+            "doc+page only."
+        )
     if bm25:
         LOGGER.info(
             "Hybrid retrieval: dense top-%d + BM25 top-%d, RRF k=%d, fused to %d",
@@ -609,7 +697,9 @@ def main(argv: list[str] | None = None) -> int:
             LOGGER.error("Collection %s does not exist. Run embed_index first.", collection_name)
             return 1
         results = [
-            evaluate_item(item, client, collection_name, embedder, settings, reranker, bm25)
+            evaluate_item(
+                item, client, collection_name, embedder, settings, reranker, bm25, parents
+            )
             for item in tqdm(items, desc="Retrieving", unit="q")
         ]
     finally:
@@ -621,6 +711,16 @@ def main(argv: list[str] | None = None) -> int:
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "tag": args.tag,
             "provisional": bool(args.allow_unverified),
+            "parent_docs": settings["parent_docs"],
+            "chunk_policy": settings["chunk_policy"],
+            "candidates_after_expansion_median": (
+                round(statistics.median([r.candidates_after_expansion for r in results]), 1)
+                if settings["parent_docs"]
+                else None
+            ),
+            # Recorded so a results file can never be silently compared against
+            # one built on a different chunking strategy.
+            "exact_chunk_comparable": not settings["parent_docs"],
             "rerank": settings["rerank"],
             "rerank_depth": settings["rerank_depth"],
             "hybrid": settings["hybrid"],

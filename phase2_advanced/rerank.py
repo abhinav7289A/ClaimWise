@@ -55,6 +55,7 @@ class CrossEncoderReranker:
         model_name: str,
         device: str = "cpu",
         batch_size: int = 16,
+        max_length: int = 512,
     ) -> None:
         """Load the cross-encoder.
 
@@ -65,11 +66,23 @@ class CrossEncoderReranker:
             model_name: HuggingFace cross-encoder id.
             device: "cpu" or "cuda".
             batch_size: Pairs scored per forward pass.
+            max_length: Combined query+passage tokens the model will read.
+                Passed explicitly rather than left to the tokenizer default
+                because it silently caps what this stage can see:
+                bge-reranker-base is `model_max_length=512`, and anything longer
+                is truncated with no warning. Phase 2's parent-document run lost
+                4.7 points of hit@5 to exactly this — 1,780-character parents
+                clipped mid-block, so the cross-encoder scored their openings and
+                never read their endings. Stated here so the limit is a visible
+                constraint that shapes chunk sizing, not a hidden one.
         """
-        LOGGER.info("Loading cross-encoder %s on %s", model_name, device)
+        LOGGER.info(
+            "Loading cross-encoder %s on %s (max_length=%d tokens)", model_name, device, max_length
+        )
         self.model_name = model_name
         self.batch_size = batch_size
-        self._model = CrossEncoder(model_name, device=device)
+        self.max_length = max_length
+        self._model = CrossEncoder(model_name, device=device, max_length=max_length)
 
     def rerank(
         self, query: str, chunks: list[RetrievedChunk], top_k: int | None = None
@@ -121,6 +134,7 @@ def build_reranker(config: dict[str, Any], model_name: str | None = None) -> Cro
         model_name=model_name or cfg_get(config, "rerank.model_name", "BAAI/bge-reranker-base"),
         device=cfg_get(config, "rerank.device", "cpu"),
         batch_size=cfg_get(config, "rerank.batch_size", 16),
+        max_length=cfg_get(config, "rerank.max_length", 512),
     )
 
 

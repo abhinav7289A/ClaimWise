@@ -1,0 +1,74 @@
+{
+  "positives": 85,
+  "negatives": 15,
+  "hit_at_k_page": {
+    "1": 0.5294,
+    "3": 0.7059,
+    "5": 0.8706,
+    "10": 0.8824
+  },
+  "hit_at_k_chunk": {
+    "1": 0.3529,
+    "3": 0.5176,
+    "5": 0.6118,
+    "10": 0.6353
+  },
+  "hit_at_k_loose": {
+    "1": 0.5412,
+    "3": 0.7176,
+    "5": 0.8706,
+    "10": 0.8824
+  },
+  "mrr": 0.6501,
+  "page_recall_at_5": 0.8706,
+  "latency_ms": {
+    "median": 3426.97,
+    "p95": 4008.28
+  },
+  "by_policy_type": {
+    "health": {
+      "items": 43,
+      "hit_at_5_page": 0.8605,
+      "mrr": 0.63
+    },
+    "home": {
+      "items": 21,
+      "hit_at_5_page": 0.9048,
+      "mrr": 0.6984
+    },
+    "life": {
+      "items": 21,
+      "hit_at_5_page": 0.8571,
+      "mrr": 0.6429
+    }
+  },
+  "negatives_mean_top_score": 0.0964,
+  "missed_item_ids": [
+    "g-002",
+    "g-012",
+    "g-017",
+    "g-030",
+    "g-041",
+    "g-058",
+    "g-069",
+    "g-076",
+    "g-077"
+  ],
+  "created_at": "2026-08-15T18:48:53+00:00",
+  "tag": "mx-rr20",
+  "provisional": true,
+  "parent_docs": true,
+  "chunk_policy": true,
+  "candidates_after_expansion_median": 20.0,
+  "exact_chunk_comparable": false,
+  "rerank": true,
+  "rerank_depth": 20,
+  "hybrid": false,
+  "hybrid_config": null,
+  "rerank_model": "BAAI/bge-reranker-base",
+  "rerank_ms_median": 3394.12,
+  "embed_model": "BAAI/bge-small-en-v1.5",
+  "collection": "claimwise_mx__baai_bge_small_en_v1_5",
+  "retrieval_top_k": 20,
+  "golden_set": "data/eval/golden.jsonl"
+}

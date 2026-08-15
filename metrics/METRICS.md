@@ -64,24 +64,88 @@ Free deterministic tier only. Run tag `free2`, 85 positives + 15 negatives.
 
 Fabricated citations: g-043, g-056, g-057. Missed refusal: g-097.
 
-> **⚠️ RAGAS faithfulness and answer relevancy were never successfully
-> computed.** The smoke run failed on
-> `No module named 'langchain_community.chat_models.vertexai'`, and the full
-> `free2` run was executed with `--skip-ragas`. Phase 1's stated exit criteria
-> are therefore **not fully met** on paper. Per CLAUDE.md §6 these cells stay
-> empty rather than being filled with plausible values.
+### 1.5b RAGAS judged metrics — resolved 2026-08-14
 
-| Faithfulness | Answer relevancy |
-|--------------|------------------|
-| _not computed_ | _not computed_ |
+Blocked since Phase 1 by an upstream defect (P-18): ragas 0.4.3 hard-imports
+`langchain_community.chat_models.vertexai`, which langchain-community 0.4
+deleted. Unblocked with a scoped compatibility shim, recorded in every results
+file as `shims_applied`.
+
+| Date | Commit | Run tag | Judge | Scored | Faithfulness | _failed_ | Answer relevancy | _failed_ |
+|------|--------|---------|-------|-------:|--------------|---------:|------------------|---------:|
+| 2026-08-14 | `97545ea+wt` | `ragas-baseline` (14:21) | Llama-3.3-70B (HF) | 78 | 0.8420 | **24** | 0.8313 | 1 |
+| 2026-08-14 | `97545ea+wt` | **`ragas-baseline` (16:43)** | Llama-3.3-70B (HF) | 78 | **0.8289** | 1 | **0.8384** | 0 |
+
+> **⚠️ Generator changed 2026-08-15 — these rows are superseded, not
+> comparable.** The HF Inference balance was exhausted, forcing a move to NIM.
+> The intended swap was like-for-like (`meta-llama/Llama-3.3-70B-Instruct` →
+> `meta/llama-3.3-70b-instruct`, same weights, different host), but that NIM
+> endpoint refused connections. The first working alternative,
+> `nvidia/llama-3.3-nemotron-super-49b-v1.5`, turned out to be a reasoning
+> model — it spent **248 output tokens answering "OK"** — making it slow,
+> rate-limit-prone and expensive. Settled on `google/gemma-4-31b-it`, which
+> answers the same prompt in **2 tokens**.
+>
+> So the generator changed **family and size**, 70B Llama → 31B Gemma, not
+> merely host. **Nothing below can be compared against a NIM run.** A fresh
+> no-rerank baseline on NIM is required before reranking is measured, or the
+> model swap and the pipeline change would be confounded in a single delta.
+>
+> The judge is also now pinned separately (`openai/gpt-oss-120b`) so it stays
+> fixed while generators change — see the `judge:` block in `config.yaml`.
+
+**Pipeline measured: dense retrieval, top-5, NO reranking.** `run_ragas.py`
+calls `answer_question()` without a reranker, so it ignores `rerank.enabled:
+true` in config. That makes these numbers a true *Phase 1* baseline, which is
+what was wanted — but it also means **reranking's effect on generation has
+never been measured**, and Phase 2's delta table has no generation-side rows.
+`run_ragas.py` must accept a reranker before technique 3 is evaluated.
+
+**The second run is the baseline of record.** The first computed faithfulness
+over only 54 of 78 items — 24 judge replies hit
+`OUTPUT_PARSING_FAILURE` and returned NaN. The `_failed` counters were added in
+the same session precisely so a mean over survivors could not be mistaken for a
+mean over the set; they caught a real 24-item hole on their first run.
+
+**⚠️ Run-to-run variance is real and must be respected in attribution.** The two
+runs used identical inputs and `temperature=0`, yet differ:
+
+| Metric | Run 1 | Run 2 | Spread |
+|---|---|---|---|
+| Faithfulness | 0.8420 | 0.8289 | 1.3 pts |
+| Answer relevancy | 0.8313 | 0.8384 | 0.7 pts |
+| Citation validity | 0.947 | 0.958 | 1.1 pts |
+| Citation coverage | 0.974 | 0.923 | **5.1 pts** |
+| Fabricated citations | 4 (adds g-075) | 3 | 1 item |
+
+The hosted free model is not deterministic despite `temperature=0`. **A
+generation-side change worth fewer than ~2 points is indistinguishable from
+noise on a single run** and must not be reported as an improvement.
 
 ### 1.6 Phase 1 exit criteria status
 
 | Criterion | Status |
 |---|---|
 | Baseline retrieval numbers recorded | ✅ |
-| Baseline generation numbers recorded | ⚠️ free metrics only; RAGAS pair missing |
+| Baseline generation numbers recorded | ✅ as of 2026-08-14 (§1.5b) |
 | `metrics/failure_analysis_p1.md` — 10 worst failures analysed | ❌ not written |
+
+### 1.7 The dominant generation defect
+
+Of 85 positives, retrieval supplies evidence for 59 and fails on 26. On those 26
+the model should refuse. It refuses 6 times and answers 20 times:
+
+| Behaviour | Rate | Count |
+|---|---|---|
+| Refused without evidence (correct) | 0.231 | 6 / 26 |
+| **Answered without evidence (hallucinated)** | **0.769** | **20 / 26** |
+| Refused with evidence (false refusal) | 0.017 | 1 / 59 (g-008) |
+| Refusal accuracy on negatives | 0.933 | 14 / 15 (misses g-097) |
+
+**When retrieval fails, the generator invents an answer 77% of the time.** This
+is a generator defect, not a retrieval one, and no Phase 2 technique addresses
+it. It is the explicit target of Phase 3's confidence gate (P-14: threshold
+cross-encoder top-1 at ~0.20–0.25) and Phase 4's RAFT negatives.
 
 ---
 
@@ -94,6 +158,26 @@ _One row per technique, so every improvement is attributable._
 | 2026-08-12 | `97545ea+wt` | *(baseline: dense, top-5)* | 0.694 | — | — | 0.894 @20 | ~120 ms | — |
 | 2026-08-13 | `97545ea+wt` | **1. Cross-encoder rerank** @20 | **0.812** | **+11.8** | 0.6158 | 0.894 @20 | 10,217 ms | ✅ **adopted** |
 | 2026-08-14 | `97545ea+wt` | 2. Hybrid BM25 + RRF @20 | 0.812 | **+0.0** | 0.6177 | 0.859 @20 | 10,851 ms | ❌ **rejected (D-17)** |
+| 2026-08-15 | `97545ea+wt` | 3. Parent-document retrieval | 0.788 | −2.4 | 0.5826 | **0.906** @20 | 1,476 ms | ⚠️ **rejected globally, kept for routing (D-18)** |
+| 2026-08-16 | `97545ea+wt` | **5. Density-based chunk policy** | **0.871** | **+5.9** | **0.6501** | 0.894 @20 | 3,427 ms | ✅ **adopted (D-19)** |
+
+### Phase 2 exit criterion
+
+| | Value |
+|---|---|
+| Phase 1 baseline hit@5 (doc+page) | 0.694 |
+| Best Phase 2 pipeline | **0.871** |
+| **Improvement** | **+17.7 points** |
+| Target | ≥15 points |
+| **Status** | ✅ **met** |
+
+Best pipeline: density-selected chunking (life → 400/2,000 parent-child, others
+→ flat 1,000/150) + cross-encoder rerank@20 over children, parents expanded
+after reranking.
+
+**Read with D-19's three caveats**: the strategy split was chosen on this eval
+set (selection on test data), the density threshold is validated on n=1, and
+`exact chunk` is not comparable across chunking strategies.
 
 ### 2.1 Reranking — candidate depth sweep (D-16)
 

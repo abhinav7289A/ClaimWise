@@ -1,0 +1,51 @@
+{
+  "created_at": "2026-08-14T13:57:41+00:00",
+  "tag": "ragas-shim-smoke",
+  "provisional": true,
+  "generator": {
+    "provider": "hf",
+    "model": "meta-llama/Llama-3.3-70B-Instruct"
+  },
+  "top_k": 5,
+  "free_metrics": {
+    "positives": 5,
+    "negatives": 0,
+    "citation_coverage": 1.0,
+    "citation_validity": 1.0,
+    "fabricated_citation_items": [],
+    "positives_with_evidence": 3,
+    "positives_without_evidence": 2,
+    "false_refusal_rate": 0.0,
+    "false_refusal_items": [],
+    "correct_refusal_rate": 0.5,
+    "ungrounded_answer_rate": 0.5,
+    "ungrounded_answer_items": [
+      "g-001"
+    ],
+    "refusal_accuracy": 0.0,
+    "missed_refusal_items": [],
+    "latency_seconds": {
+      "median": 0.84,
+      "p95": 2.694
+    },
+    "tokens": {
+      "prompt": 7371,
+      "completion": 276,
+      "total": 7647,
+      "mean_per_query": 1529
+    },
+    "estimated_usd": 0.0054
+  },
+  "ragas": {
+    "scored_items": 4,
+    "ragas_version": "0.4.3",
+    "shims_applied": [
+      "langchain_community.chat_models.vertexai"
+    ],
+    "answer_relevancy": 0.8319,
+    "answer_relevancy_failed": 0,
+    "faithfulness": 0.875,
+    "faithfulness_failed": 0,
+    "_scored": 4
+  }
+}

@@ -38,10 +38,13 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import logging
+import math
 import statistics
 import sys
+import types
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -221,6 +224,118 @@ def free_metrics(answered: list[AnsweredItem]) -> dict[str, Any]:
     }
 
 
+def install_ragas_compat_shims() -> list[str]:
+    """Satisfy ragas 0.4.3's hard import of a module langchain-community deleted.
+
+    `ragas/llms/base.py` line 12 does an unconditional, top-level
+    `from langchain_community.chat_models.vertexai import ChatVertexAI`.
+    langchain-community 0.4 removed that module — `ChatVertexAI` now lives in
+    the separate `langchain-google-vertexai` package — and ragas 0.4.3 declares
+    `langchain-community` with no upper bound, so the resolver is free to pick a
+    version whose absence breaks every ragas metric before a single question is
+    scored. This is an upstream defect, not a misconfiguration on our side.
+
+    Only that one module is missing: `langchain_community.llms.vertexai`, which
+    ragas imports on the next line, still ships. The whole blast radius is one
+    import, which is what makes stubbing it defensible rather than reckless.
+
+    A placeholder class is *correct* here, not merely convenient. ragas uses the
+    symbol solely in `isinstance` checks deciding whether a judge can return
+    several completions per call. We never judge with Vertex AI, so every such
+    check should evaluate False — exactly what an unrelated empty class does.
+
+    Downgrading langchain-community instead would drag langchain-core back below
+    1.0 and take `RecursiveCharacterTextSplitter` with it, re-chunking the corpus
+    and invalidating every retrieval number recorded so far. Not worth it to
+    avoid fifteen lines.
+
+    Returns:
+        Names of the modules that had to be stubbed — empty when the installed
+        versions need no help. Recorded in the results file so a metric produced
+        under a patched dependency is never mistaken for one that wasn't.
+    """
+    stubbed: list[str] = []
+    module_name = "langchain_community.chat_models.vertexai"
+
+    if module_name in sys.modules:
+        return stubbed
+    try:
+        importlib.import_module(module_name)
+        return stubbed
+    except ModuleNotFoundError:
+        pass
+
+    module = types.ModuleType(module_name)
+
+    class ChatVertexAI:
+        """Placeholder for a class ragas type-checks against but we never use."""
+
+    module.ChatVertexAI = ChatVertexAI
+    sys.modules[module_name] = module
+    # Also bind it on the parent package: `from a.b.c import D` resolves via
+    # sys.modules, but code doing `a.b.c` attribute-style would not find it.
+    parent = sys.modules.get("langchain_community.chat_models")
+    if parent is not None:
+        parent.vertexai = module
+    stubbed.append(module_name)
+
+    LOGGER.warning(
+        "Applied compatibility shim for %s (ragas 0.4.3 vs langchain-community 0.4). "
+        "Recorded in the results file.",
+        module_name,
+    )
+    return stubbed
+
+
+def aggregate_ragas_scores(per_sample: list[dict[str, Any]]) -> dict[str, Any]:
+    """Average RAGAS per-sample scores, counting the ones the judge failed on.
+
+    `EvaluationResult` is not a mapping — it has `__getitem__` but no `keys()`,
+    so `dict(result)` silently falls back to sequence iteration, asks for
+    `result[0]`, and dies with `KeyError: 0`. Its `.scores` attribute is the
+    documented public surface: one dict per sample, metric name to score.
+
+    RAGAS emits NaN when the judge's reply can't be parsed into a verdict, which
+    is common enough to matter. Averaging over the survivors while reporting
+    "faithfulness over 59 items" would quietly overstate coverage, so the count
+    of failures is reported beside every metric. A metric computed on 40 of 59
+    items is a different claim from one computed on all 59.
+
+    Args:
+        per_sample: `EvaluationResult.scores` — one dict per scored sample.
+
+    Returns:
+        `{metric: mean}` plus `{metric}_failed` counts, and `_scored` for the
+        number of samples that produced at least one usable score.
+    """
+    if not per_sample:
+        return {}
+
+    metric_names = sorted({name for sample in per_sample for name in sample})
+    aggregated: dict[str, Any] = {}
+
+    for name in metric_names:
+        usable: list[float] = []
+        failed = 0
+        for sample in per_sample:
+            value = sample.get(name)
+            try:
+                numeric = float(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                failed += 1
+                continue
+            if math.isnan(numeric):
+                failed += 1
+            else:
+                usable.append(numeric)
+
+        aggregated[name] = round(statistics.fmean(usable), 4) if usable else None
+        aggregated[f"{name}_failed"] = failed
+
+    aggregated["_scored"] = len(per_sample)
+    return aggregated
+
+
 def run_ragas_metrics(
     answered: list[AnsweredItem], config: dict[str, Any], provider: str | None, model: str | None
 ) -> dict[str, Any]:
@@ -246,33 +361,92 @@ def run_ragas_metrics(
     if not scorable:
         return {"error": "no scorable items"}
 
+    shims = install_ragas_compat_shims()
+
     try:
+        import ragas
         from datasets import Dataset
+        from langchain_core.rate_limiters import InMemoryRateLimiter
         from langchain_huggingface import HuggingFaceEmbeddings
         from langchain_openai import ChatOpenAI
         from ragas import evaluate
         from ragas.embeddings import LangchainEmbeddingsWrapper
         from ragas.llms import LangchainLLMWrapper
         from ragas.metrics import answer_relevancy, faithfulness
+        from ragas.run_config import RunConfig
     except ImportError as error:
-        return {"error": f"ragas imports failed: {error}"}
+        return {"error": f"ragas imports failed: {error}", "shims_applied": shims}
 
-    provider_name = provider or cfg_get(config, "generator.provider", "hf")
+    # Provenance: a judged metric is only interpretable against the judge and
+    # the library version that produced it, and doubly so under a shim.
+    environment = {
+        "ragas_version": getattr(ragas, "__version__", "unknown"),
+        "shims_applied": shims,
+    }
+
+    # Judge selection falls back through three levels: CLI flag, the `judge`
+    # config block, then the generator's own provider. The middle level is what
+    # lets the judge stay fixed while the generator being measured changes —
+    # required for Phase 4's generator comparison to mean anything.
+    provider_name = (
+        provider
+        or cfg_get(config, "judge.provider", "")
+        or cfg_get(config, "generator.provider", "hf")
+    )
     provider_config = cfg_get(config, f"generator.providers.{provider_name}", {})
+    if not provider_config:
+        return {"error": f"unknown judge provider {provider_name!r}", **environment}
     import os
 
     api_key = os.getenv(provider_config.get("api_key_env", ""), "")
     if not api_key:
-        return {"error": f"missing API key for provider {provider_name!r}"}
+        return {
+            "error": (
+                f"missing API key for judge provider {provider_name!r} "
+                f"(expected ${provider_config.get('api_key_env', '?')} in .env)"
+            ),
+            **environment,
+        }
 
+    judge_model = model or cfg_get(config, "judge.model", "") or provider_config["model"]
+    requests_per_minute = cfg_get(config, "judge.requests_per_minute", 30)
+    max_workers = cfg_get(config, "judge.max_workers", 4)
+
+    # The throttle RAGAS would otherwise not have. Judge calls are the one path
+    # in this project that bypasses `common/generator.py`, so the limiter is
+    # attached to the LangChain client itself — the only place that sees every
+    # judge request. A token bucket of size 1 forbids bursts outright, which is
+    # what a per-minute provider quota actually cares about.
+    rate_limiter = InMemoryRateLimiter(
+        requests_per_second=requests_per_minute / 60.0,
+        check_every_n_seconds=0.1,
+        max_bucket_size=1,
+    )
     judge = LangchainLLMWrapper(
         ChatOpenAI(
-            model=model or provider_config["model"],
+            model=judge_model,
             base_url=provider_config["base_url"],
             api_key=api_key,
             temperature=0.0,
-            timeout=cfg_get(config, "generator.timeout_seconds", 60),
+            timeout=cfg_get(config, "judge.timeout_seconds", 180),
+            max_retries=cfg_get(config, "judge.max_retries", 6),
+            rate_limiter=rate_limiter,
         )
+    )
+    environment.update(
+        {
+            "judge_provider": provider_name,
+            "judge_model": judge_model,
+            "judge_requests_per_minute": requests_per_minute,
+            "judge_max_workers": max_workers,
+        }
+    )
+    LOGGER.info(
+        "Judge: %s/%s — %d req/min, %d workers",
+        provider_name,
+        judge_model,
+        requests_per_minute,
+        max_workers,
     )
     # answer_relevancy embeds generated questions; reuse the pipeline's own
     # embedding model rather than pulling in a second one.
@@ -289,23 +463,35 @@ def run_ragas_metrics(
         }
     )
 
+    # Aggregation lives inside the guard deliberately. The first attempt at this
+    # crashed *after* evaluate() succeeded — every judge call already paid for —
+    # and took the free metrics down with it, breaking this module's stated
+    # promise that a RAGAS failure never discards them. Anything touching the
+    # result object belongs behind the same net as the call that produced it.
     try:
         result = evaluate(
             dataset,
             metrics=[faithfulness, answer_relevancy],
             llm=judge,
             embeddings=embedder,
+            # RAGAS defaults to max_workers=16. Against a ~40 req/min quota that
+            # is an immediate 429 storm, and the rate limiter above would then
+            # be fighting sixteen threads for one token. Both knobs are needed:
+            # this one caps concurrency, that one caps rate.
+            run_config=RunConfig(
+                max_workers=max_workers,
+                timeout=cfg_get(config, "judge.timeout_seconds", 180),
+                max_retries=cfg_get(config, "judge.max_retries", 6),
+            ),
         )
+        aggregated = aggregate_ragas_scores(getattr(result, "scores", []))
     except Exception as error:  # noqa: BLE001 — surface any RAGAS failure, don't crash the run
-        return {"error": f"ragas evaluate failed: {type(error).__name__}: {error}"}
+        return {
+            "error": f"ragas evaluate failed: {type(error).__name__}: {error}",
+            **environment,
+        }
 
-    scores = {"scored_items": len(scorable)}
-    for key, value in dict(result).items():
-        try:
-            scores[key] = round(float(value), 4)
-        except (TypeError, ValueError):
-            scores[key] = value
-    return scores
+    return {"scored_items": len(scorable), **environment, **aggregated}
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -327,6 +513,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--judge-model", default=None, help="Model for the RAGAS judge.")
     parser.add_argument("--top-k", type=int, default=None, help="Override rag.top_k.")
     parser.add_argument("--limit", type=int, default=None, help="Answer only N items.")
+    # Reranking follows `rerank.enabled` in config so this harness measures the
+    # pipeline that is actually configured. It previously ignored that setting
+    # entirely, which is why no Phase 2 technique has a generation-side delta.
+    parser.add_argument(
+        "--no-rerank", action="store_true", help="Disable reranking regardless of config."
+    )
+    parser.add_argument(
+        "--rerank-depth", type=int, default=None, help="Override rerank.candidate_depth."
+    )
     parser.add_argument(
         "--skip-ragas",
         action="store_true",
@@ -377,6 +572,26 @@ def main(argv: list[str] | None = None) -> int:
         rag_settings["collection_prefix"], rag_settings["embed_model"]
     )
 
+    if args.rerank_depth:
+        rag_settings["candidate_depth"] = args.rerank_depth
+
+    reranker = None
+    if rag_settings["rerank"] and not args.no_rerank:
+        # Imported here rather than at module scope: `phase2_advanced.rerank`
+        # imports RetrievedChunk from `phase1_rag.rag_chain`, so a top-level
+        # import would be circular. Same one-way dependency as rag_chain.py.
+        from phase2_advanced.rerank import build_reranker
+
+        reranker = build_reranker(config)
+        LOGGER.info(
+            "Reranking enabled: %s over %d candidates",
+            reranker.model_name,
+            rag_settings["candidate_depth"],
+        )
+    else:
+        LOGGER.info("Reranking disabled — measuring the dense top-%d pipeline.",
+                    rag_settings["top_k"])
+
     answered: list[AnsweredItem] = []
     client = QdrantClient(path=rag_settings["qdrant_path"])
     try:
@@ -393,6 +608,7 @@ def main(argv: list[str] | None = None) -> int:
                     embedder=embedder,
                     generator=generator,
                     settings=rag_settings,
+                    reranker=reranker,
                 )
             except RuntimeError as error:
                 LOGGER.error("Item %s failed: %s", item["id"], error)
@@ -446,6 +662,16 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     print("\n=== FREE ANSWER METRICS (0 extra LLM calls) ===")
+    # Printed first because it identifies which pipeline produced everything
+    # below. Two runs of this file are only comparable if this line matches.
+    print(
+        f"pipeline            : dense top-{rag_settings['top_k']}"
+        + (
+            f" + rerank@{rag_settings['candidate_depth']} ({reranker.model_name})"
+            if reranker
+            else " (no rerank)"
+        )
+    )
     print(f"answered            : {len(answered)} ({metrics['positives']} pos / {metrics['negatives']} neg)")
     print(f"citation coverage   : {metrics['citation_coverage']:.3f}")
     print(f"citation validity   : {metrics['citation_validity']:.3f}")
@@ -483,6 +709,8 @@ def main(argv: list[str] | None = None) -> int:
         print("skipped (--skip-ragas)")
     elif "error" in ragas_scores:
         print(f"FAILED: {ragas_scores['error']}")
+        if ragas_scores.get("shims_applied"):
+            print(f"shims applied      : {ragas_scores['shims_applied']}")
         print("Free metrics above are still valid.")
     else:
         for key, value in ragas_scores.items():
@@ -494,6 +722,13 @@ def main(argv: list[str] | None = None) -> int:
         "provisional": bool(args.allow_unverified),
         "generator": {"provider": generator.provider, "model": generator.model},
         "top_k": rag_settings["top_k"],
+        # Without these, two results files are indistinguishable even though
+        # they measured different pipelines — which is exactly how the first
+        # RAGAS baseline came to be recorded with no note that it was
+        # dense-only despite `rerank.enabled: true` sitting in config.
+        "rerank": bool(reranker),
+        "rerank_model": reranker.model_name if reranker else None,
+        "rerank_depth": rag_settings["candidate_depth"] if reranker else None,
         "free_metrics": metrics,
         "ragas": ragas_scores,
     }

@@ -293,6 +293,11 @@ def to_point(chunk: dict[str, Any], vector: list[float], user_id: str) -> models
             "page": chunk["page"],
             "chunk_index": chunk["chunk_index"],
             "text": chunk["text"],
+            # Optional, and absent for Phase 1 chunks. Phase 2's parent-document
+            # retrieval indexes small children and swaps in the larger parent
+            # block at query time; without this field surviving into the payload,
+            # a retrieved child has no way back to its parent.
+            "parent_id": chunk.get("parent_id"),
         },
     )
 
@@ -423,6 +428,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--model", default=None, help="Override embed.model_name. Builds its own collection."
     )
+    parser.add_argument(
+        "--collection-prefix",
+        default=None,
+        help=(
+            "Override index.collection_prefix. Use a distinct prefix when indexing a "
+            "different chunk set (e.g. Phase 2 children) so the baseline collection "
+            "survives and its numbers stay reproducible."
+        ),
+    )
     parser.add_argument("--device", default=None, help="Override embed.device (cpu / cuda).")
     parser.add_argument(
         "--user-id", default=None, help="Override index.default_user_id written to every point."
@@ -459,7 +473,8 @@ def resolve_settings(config: dict[str, Any], args: argparse.Namespace) -> dict[s
         "normalize": cfg_get(config, "embed.normalize", True),
         "query_prefix": cfg_get(config, "embed.query_prefix", ""),
         "qdrant_path": cfg_get(config, "index.path", "qdrant_storage"),
-        "collection_prefix": cfg_get(config, "index.collection_prefix", "claimwise"),
+        "collection_prefix": args.collection_prefix
+        or cfg_get(config, "index.collection_prefix", "claimwise"),
         "distance": cfg_get(config, "index.distance", "cosine"),
         "default_user_id": args.user_id or cfg_get(config, "index.default_user_id", "local-dev"),
         "upsert_batch_size": cfg_get(config, "index.upsert_batch_size", 128),
@@ -537,7 +552,12 @@ def main(argv: list[str] | None = None) -> int:
         "smoke_query": args.smoke_query,
         "smoke_results": results,
     }
-    meta_path = processed_dir / f"index_{slugify_model_name(settings['model_name'])}.meta.json"
+    # Named after the COLLECTION, not just the model. Keying on the model alone
+    # meant indexing a second chunk set with the same embedder silently
+    # overwrote the first build's provenance — which is exactly what happened to
+    # the Phase 1 sidecar when the Phase 2 children were indexed. One sidecar
+    # per collection, since one collection is what a metric is traceable to.
+    meta_path = processed_dir / f"index_{collection_name}.meta.json"
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 

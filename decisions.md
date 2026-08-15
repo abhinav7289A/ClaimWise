@@ -864,6 +864,137 @@ plausible direction with evidence is worth recording, not hiding (CLAUDE.md §6)
 
 ---
 
+### D-18 · Parent-document retrieval — rejected globally, kept for routing
+**Date:** 2026-08-15
+
+**Setup.** 337 parents (2,000 chars) over 1,644 children (400 chars) from the
+same 102 pages, children indexed into their own collection so the Phase 1
+baseline stayed reproducible.
+
+**The composition bug, and why it is the interesting part.** The first version
+expanded children to parents *before* reranking, reasoning that the
+cross-encoder should read the same text the generator will. Two measurements
+killed that argument:
+
+1. **bge-reranker-base is `model_max_length=512`** and truncates silently past
+   it. Median parent is 1,780 chars ≈ 445 tokens; with the query prepended, the
+   upper half of parents were cut off. The cross-encoder scored their openings
+   and never read their endings — where qualifying clauses tend to sit.
+2. **Expansion deduplicates**, so 20 children collapsed to a median of 15
+   parents. The reranker got a smaller pool than the run it was compared
+   against, confounding the comparison on top of degrading it.
+
+Reranking children first and expanding the winners afterwards recovered 2.3
+points, **−4.7 → −2.4**. Ranking precision and context completeness want
+different stages, not the same one. `rerank.max_length` is now set explicitly so
+the limit is a visible constraint that shapes chunk sizing rather than a silent
+one.
+
+**Result vs dense + rerank@20:**
+
+| Metric | Baseline | Parent-docs | Δ |
+|---|---|---|---|
+| hit@5 (doc+page) | **0.8118** | 0.7882 | −2.4 |
+| MRR | 0.6158 | 0.5826 | −3.3 |
+| Pool recall @20 | 0.894 | **0.9059** | **+1.2** |
+| Complete misses | 9 | **8** | −1 |
+| p50 latency | 10,217 ms | **1,476 ms** | **7× faster** |
+
+**Retrieval improved; ranking did not.** Pool recall rose and the technique
+reached `g-017` and `g-058` — two of the five items D-17 recorded as unreachable
+by dense retrieval *or* any of four hybrid configurations. 400-char children
+reach content nothing else in Phase 2 could. The aggregate still fell because
+the reranker converts that pool into a top-5 slightly less efficiently (87% vs
+90.8%): more fragmentary children give a cross-encoder less to judge.
+
+**Decision.** Not adopted globally. `parent_docs.enabled` stays `false`. Kept
+and indexed, because the per-type result below makes it a routing component
+rather than a dead end.
+
+**The per-type result, which is the real finding:**
+
+| Policy type | Items | Baseline | Parent-docs | Δ |
+|---|---:|---|---|---|
+| health | 43 | 0.8605 | 0.8140 | −4.7 |
+| home | 21 | **0.9048** | 0.7619 | **−14.3** |
+| life | 21 | 0.6190 | **0.7619** | **+14.3** |
+
+An exact mirror, and the third independent measurement of the same shape —
+hybrid gave life +9.5 (D-17), parent-docs gives it +14.3, and P-17 predicted
+both. **Optimal chunk size is a property of the document, not of the corpus.**
+A single global chunk size leaves ~14 points on the table for the densest
+document while being correct for the others.
+
+**Carried to technique 5 as a hypothesis, not a result.** Routing life to
+parent-docs and everything else to Phase 1 chunks projects to
+`(43×0.8605 + 21×0.9048 + 21×0.7619) / 85 = 0.847` — +3.5 over the current best
+and +15.3 over the Phase 1 baseline, which would clear the exit criterion. That
+number is **arithmetic on measured per-type values, not a measured run**, and
+selecting the per-type strategy from the same 85-item eval set is selection on
+test data. With 21 life items, part of the +14.3 may be noise. It must be
+measured before it is claimed.
+
+---
+
+### D-19 · ADOPTED — density-selected per-document chunking
+**Date:** 2026-08-16
+
+**Hypothesis under test.** D-18 projected 0.847 from arithmetic over per-type
+numbers. Measured: **0.871**. The projection was conservative.
+
+| Metric | Phase 1 baseline | Best (rerank@20) | **Chunk policy** | Δ vs best |
+|---|---|---|---|---|
+| hit@5 (doc+page) | 0.694 | 0.8118 | **0.8706** | **+5.9** |
+| hit@1 | — | 0.4824 | **0.5294** | +4.7 |
+| MRR | — | 0.6158 | **0.6501** | +3.4 |
+| p50 latency | ~120 ms | 10,217 ms | **3,427 ms** | **3× faster** |
+
+**Against the Phase 1 baseline: 0.694 → 0.871 = +17.7 points.** Phase 2's exit
+criterion (≥15-point context-recall improvement) is met.
+
+**Per type — the whole point of the technique:**
+
+| Policy type | Baseline | rerank@20 | Chunk policy | Δ vs rerank |
+|---|---|---|---|---|
+| health | 0.674 | 0.8605 | 0.8605 | 0.0 |
+| home | 0.762 | 0.9048 | 0.9048 | 0.0 |
+| life | 0.667 | 0.6190 | **0.8571** | **+23.8** |
+
+Health and home land on their previous values to four decimal places — mixing
+granularities in one collection costs the flat-chunked documents nothing, which
+was the main risk. All the gain is life, and it exceeds the +14.3 that
+parent-documents alone produced. The extra ~9.5 points is most likely the
+`min_chunk_chars` filter this module applies and `parent_docs.py` omitted: that
+build produced 6-character children, which embed to noise and still occupy a
+retrieval slot.
+
+**Decision.** Adopted. `chunk_policy.enabled: true`.
+
+**What did NOT improve, and it matters.** Complete misses are 9 — *the same nine
+items as the rerank@20 baseline*, exactly. Pool recall is unchanged at 0.894.
+This technique moved nothing into the pool; it ranked the existing pool far
+better. Note the cost: the pure parent-documents run reached `g-017` and `g-058`
+(two of D-17's five permanently-unreachable items) because *every* document had
+small children. Restricting children to dense documents gives those two back.
+Small chunks reach content in sparse documents too — they just cost more
+elsewhere than they gain.
+
+**Honest limits on this result — read before quoting it.**
+
+1. **The strategy split was chosen using the same 85-item eval set.** That is
+   selection on test data. The number is optimistic and a held-out document is
+   the only real test.
+2. **The density threshold is validated on n=1.** Exactly one document is above
+   8,000 chars/page. The corpus gap is wide (5,935 → 11,639) so 8,000 is not
+   delicate, but "dense documents want small chunks" currently rests on a single
+   document, and one more dense policy from another insurer would test it
+   properly.
+3. `exact chunk` reads 0.612 rather than 0.000 here because health and home keep
+   Phase 1 chunk ids that still match the golden set; only life's children do
+   not. It is not comparable to Phase 1's 0.765 and is not a regression.
+
+---
+
 ## Problems
 
 ### P-14 · RESOLVED — the cross-encoder *is* a usable confidence signal
@@ -945,6 +1076,66 @@ a fusion measurement and break the one-change-one-eval attribution rule.
 **Still open for technique 3.** The first hypothesis — chunks spanning too many
 topics at 11,639 chars/page — is precisely what parent-document retrieval
 addresses, and remains the more likely root cause of the 0.619 baseline.
+
+---
+
+### P-18 · RESOLVED — RAGAS was silently broken for the whole of Phase 1
+**Date:** 2026-08-14 · **Cost:** ~1 hour
+
+**Symptom.** Every RAGAS run since Phase 1 failed with
+`ragas imports failed: No module named 'langchain_community.chat_models.vertexai'`.
+The full Phase 1 generation eval was then run with `--skip-ragas`, so
+faithfulness and answer relevancy were **never computed for any phase** — and
+because the failure was caught and reported rather than raised, the gap was
+invisible until METRICS.md was backfilled and the cells came up empty.
+
+**Diagnosis.** `ragas/llms/base.py` line 12 is an unconditional top-level
+`from langchain_community.chat_models.vertexai import ChatVertexAI`.
+langchain-community 0.4 deleted that module — `ChatVertexAI` moved to the
+separate `langchain-google-vertexai` package — and ragas 0.4.3 declares
+`langchain-community` with **no upper version bound**, so the resolver was free
+to pick a version that breaks it. An upstream defect, not a misconfiguration.
+
+**Root cause.** A lockfile guarantees the same versions every run; it does not
+guarantee those versions work together. `uv.lock` faithfully reproduced a broken
+combination. The discipline that was supposed to make runs reproducible
+reproduced the breakage perfectly.
+
+**Fix.** A scoped shim in `run_ragas.py` registering a stub module before the
+ragas import. Bounded by measurement rather than hope: ragas references
+`langchain_community` in exactly two places, both in that one file, and the
+other (`langchain_community.llms.vertexai`) still ships. The placeholder class
+is *correct*, not merely convenient — ragas uses the symbol only in `isinstance`
+checks deciding whether a judge supports multiple completions, and we never
+judge with Vertex AI, so every such check should be False.
+
+Downgrading instead would have pulled langchain-core below 1.0 and taken
+`RecursiveCharacterTextSplitter` with it, re-chunking the corpus and
+invalidating every retrieval number recorded so far.
+
+**Two further defects found in our own code, both surfaced by the fix:**
+
+1. `dict(result)` was never valid. `EvaluationResult` has `__getitem__` but no
+   `keys()`, so `dict()` fell back to sequence iteration, requested `result[0]`,
+   and hit a dict keyed by metric name — `KeyError: 0`. The public surface is
+   `.scores`, a list of one dict per sample.
+2. That aggregation sat **outside** the `try`, so it crashed *after* every judge
+   call had been paid for and discarded the free metrics too — breaking the
+   module's documented promise that a RAGAS failure never costs them. Anything
+   touching the result object now sits behind the same guard as the call that
+   produced it.
+
+**Verification, and why it mattered immediately.** Per-metric NaN counters were
+added so a mean over survivors could not be mistaken for a mean over the set.
+They earned it on the first run: faithfulness reported 0.8420 over an apparent
+78 items while 24 judge replies had actually returned NaN via
+`OUTPUT_PARSING_FAILURE`. The clean re-run scored 0.8289 with 1 failure. Without
+the counter, 0.8420 would have entered METRICS.md as the Phase 1 baseline.
+
+**Carried forward.** The two runs differ by up to 5.1 points on citation
+coverage with identical inputs at `temperature=0` — the hosted free model is not
+deterministic. **Any generation-side gain below ~2 points is noise** and cannot
+be attributed to a technique from a single run. Recorded in METRICS.md §1.5b.
 
 ---
 

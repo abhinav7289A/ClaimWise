@@ -155,6 +155,11 @@ rerank:
   model_name: BAAI/bge-reranker-base
   device: cpu
   batch_size: 16
+  # bge-reranker-base is model_max_length=512 and truncates silently past it.
+  # Set explicitly because it is a real design constraint, not a detail: it caps
+  # how large a passage this stage can honestly score, which is why parent
+  # blocks are expanded AFTER reranking rather than before (see D-18).
+  max_length: 512
   # Swept empirically (D-16). Deeper candidates raise the ceiling but LOWER the
   # result — every extra candidate is another chance to promote a wrong chunk,
   # and the cross-encoder's precision degrades faster than the ceiling rises:
@@ -182,6 +187,66 @@ hybrid:
   rrf_k: 60
   chunks_path: data/processed/chunks.jsonl
 
+parent_docs:
+  # Phase 2, technique 3. Off by default so the previous result stays
+  # reproducible — one change plus one re-eval.
+  enabled: false
+
+  # Child 400 / parent 2000. The ratio is the point, not the absolute sizes:
+  # children small enough that each is *about* one thing, parents large enough
+  # to carry the cross-references insurance wording is built on ("subject to the
+  # sub-limits in Table B"). Phase 1's single 1,000-char tier was a compromise
+  # that served neither.
+  child_size: 400
+  child_overlap: 50
+  parent_size: 2000
+  # Zero on purpose. Overlap stops a clause being cut mid-sentence, which
+  # matters for children; parents are returned WHOLE into the prompt, so
+  # overlapping them would feed the generator the same sentences twice.
+  parent_overlap: 0
+
+  # bge-small truncates past ~2,000 characters. Only children are embedded, so
+  # only children can be silently truncated — the build fails loudly if any
+  # exceed this.
+  embed_budget_chars: 2000
+
+  parents_filename: parents.jsonl
+  children_filename: children.jsonl
+  parents_path: data/processed/parents.jsonl
+  # Children are indexed into their OWN collection so the Phase 1 collection
+  # survives untouched and the "before" stays reproducible at any time.
+  collection_prefix: claimwise_pd
+
+chunk_policy:
+  # Phase 2, technique 5. Chunk each document by its MEASURED page density
+  # rather than applying one global size to the corpus.
+  #
+  # Evidence (D-17, D-18, P-17): three independent measurements showed the same
+  # split — the dense life policy gains from small chunks (+9.5 hybrid, +14.3
+  # parent-docs) while sparser documents lose from them (home -14.3). Optimal
+  # chunk size is a property of the document, not of the corpus.
+  #
+  # ADOPTED 2026-08-16 (D-19): hit@5 0.8118 -> 0.8706 (+5.9), and +17.7 against
+  # the Phase 1 baseline, meeting the phase exit criterion. Life +23.8 while
+  # health and home held their previous values exactly.
+  enabled: true
+
+  # 8,000 chars/page separates the corpus on a *principle* rather than a name.
+  # Measured densities: life 11,639 | home 5,935 | health 5,856 and 2,602.
+  # Encoding `life -> parent_child` directly would reproduce the same numbers
+  # while memorising the eval set; density is measurable at ingest time, before
+  # any question is asked, and generalises to a new dense policy from any
+  # insurer. The gap here is wide (5,935 -> 11,639), so the exact threshold is
+  # not delicate — but it IS the falsifiable part of the claim, so it lives
+  # here where it can be argued with rather than buried in code.
+  density_threshold: 8000
+
+  chunks_filename: mixed_chunks.jsonl
+  parents_filename: mixed_parents.jsonl
+  parents_path: data/processed/mixed_parents.jsonl
+  # Its own collection again, so both previous results stay reproducible.
+  collection_prefix: claimwise_mx
+
 generator:
   # The swappable slot. Phases 1-3 point this at a hosted free model; Phase 5
   # points it at the fine-tuned Qwen endpoint. Nothing upstream changes,
@@ -190,12 +255,18 @@ generator:
   # NIM, OpenRouter and HF all speak the OpenAI protocol, so switching provider
   # is a base_url and a key — not a new code path.
   #
-  # hf     — HF Pro Inference Providers ($2/month). Current default.
-  # openrouter — verified working; $5 of credits. Note the configured Qwen model
-  #              is a *reasoning* model: it billed 168 output tokens to answer
-  #              "OK", so prefer a non-thinking model for bulk eval work.
-  # nim    — times out from this machine as of 2026-08-11; unresolved.
-  provider: hf
+  # nim    — current default as of 2026-08-15. Free tier, ~40 req/min.
+  #          Timed out from this machine on 2026-08-11 (P-13, unresolved) — run
+  #          `python -m common.generator` to confirm reachability before
+  #          committing to a long eval run.
+  # hf     — HF Pro Inference Providers. **Balance exhausted 2026-08-15**, which
+  #          is what forced this switch. Produced the Phase 1 baseline, so a
+  #          like-for-like comparison against those numbers is no longer
+  #          possible; see the note in METRICS.md before comparing across it.
+  # openrouter — verified working; $5 of credits. Fallback. Note the configured
+  #          Qwen model is a *reasoning* model: it billed 168 output tokens to
+  #          answer "OK", so swap in a non-thinking model for bulk eval work.
+  provider: nim
 
   # Temperature 0: evaluation must be reproducible. A judged metric that moves
   # because of sampling noise cannot be attributed to a pipeline change.
@@ -212,7 +283,7 @@ generator:
     nim:
       base_url: https://integrate.api.nvidia.com/v1
       api_key_env: NVIDIA_API_KEY
-      model: meta/llama-3.3-70b-instruct
+      model: google/gemma-4-31b-it
     openrouter:
       base_url: https://openrouter.ai/api/v1
       api_key_env: OPENROUTER_API_KEY
@@ -221,3 +292,49 @@ generator:
       base_url: https://router.huggingface.co/v1
       api_key_env: HF_TOKEN
       model: meta-llama/Llama-3.3-70B-Instruct
+
+judge:
+  # The RAGAS judge. Configured separately from `generator` on purpose: the
+  # thing being *measured* and the thing *doing the measuring* must be
+  # independently swappable, or a provider switch silently changes both sides
+  # of a comparison at once. Phase 4 benchmarks several generators against one
+  # fixed judge — that only works if they are separate settings.
+  #
+  # Empty means "reuse generator.provider". Set it when the two differ.
+  #
+  # Pinned to a DIFFERENT model from the generator on purpose. RAGAS
+  # faithfulness asks a model to judge whether an answer is grounded in its
+  # context; if the judge is the model that wrote the answer, it grades its own
+  # reasoning and scores itself generously. An independent judge is the cheapest
+  # correction available.
+  #
+  # REJECTED 2026-08-15: openai/gpt-oss-120b. The reasoning that should have
+  # helped claim decomposition broke the metric instead — it wraps replies in
+  # thinking tokens, RAGAS cannot parse a verdict out of them, and faithfulness
+  # came back None with 4/4 items failed on a 5-item smoke. A structured-output
+  # consumer needs a model that emits structure, not one that reasons well.
+  #
+  # Falling back to the generator's own model. This is a real compromise, not a
+  # free choice: a model judging its own output scores itself generously, so
+  # faithfulness here is an upper bound and must be read as one. Recorded rather
+  # than hidden. Revisit if a non-reasoning model of a different family appears
+  # on the free tier.
+  provider: nim
+  model: google/gemma-4-31b-it
+
+  # Throttling, and why it needs its own numbers.
+  #
+  # RAGAS does not use `common/generator.py`. It builds its own LangChain
+  # client, so the sliding-window throttle there does not apply to judge calls
+  # — the one place in this project where an LLM call escapes the swappable
+  # interface. These two settings are the replacement, applied directly to the
+  # LangChain client and to RAGAS's executor.
+  #
+  # RAGAS defaults to max_workers=16, meaning 16 concurrent judge calls. NIM
+  # allows ~40 req/min, so the default produces an immediate 429 storm. A
+  # 100-question run is ~156 judge calls; at 30/min that is ~5 minutes of
+  # judging, which is the correct trade against a run that fails at question 20.
+  requests_per_minute: 30
+  max_workers: 4
+  timeout_seconds: 180
+  max_retries: 6

@@ -97,6 +97,12 @@ class RetrievedChunk:
         page: 1-indexed PDF page — what gets cited.
         text: The chunk text placed into the prompt.
         score: Cosine similarity to the query.
+        parent_id: Id of the enclosing parent block, when the collection was
+            built by Phase 2's parent-document retrieval. None for Phase 1
+            chunks, which have no parent tier. This is the only link a retrieved
+            child has back to the larger block it was cut from, so it must
+            survive from the Qdrant payload into this type or expansion is
+            impossible.
     """
 
     chunk_id: str
@@ -108,6 +114,7 @@ class RetrievedChunk:
     page: int
     text: str
     score: float
+    parent_id: str | None = None
 
 
 @dataclass
@@ -240,6 +247,7 @@ def retrieve(
                 page=int(payload.get("page", 0)),
                 text=payload.get("text", ""),
                 score=round(point.score, 4),
+                parent_id=payload.get("parent_id"),
             )
         )
     return chunks
