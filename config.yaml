@@ -279,19 +279,38 @@ generator:
   # rate-limit error into a short wait instead of a failed eval run.
   requests_per_minute: 30
 
+  # Per-provider token prices, in USD per million. Previously there was one
+  # blended guess (eval.estimated_usd_per_million_tokens: 0.7) shared by every
+  # provider, which overestimated DeepSeek by ~10x. That is tolerable when the
+  # number only shows a budget draining; it is not tolerable when the total
+  # project budget is $2-3 and a single estimate decides whether a run happens.
+  # Free tiers are priced 0.0 so a paid run stands out in the ledger.
   providers:
     nim:
       base_url: https://integrate.api.nvidia.com/v1
       api_key_env: NVIDIA_API_KEY
       model: google/gemma-4-31b-it
+      # Free tier. Costs time and rate limits, not money.
+      usd_per_million_input: 0.0
+      usd_per_million_output: 0.0
     openrouter:
       base_url: https://openrouter.ai/api/v1
       api_key_env: OPENROUTER_API_KEY
-      model: qwen/qwen3.6-35b-a3b
+      # PAID, and the only paid path in the project. ~$2 lifetime budget, so
+      # every run through it must print an estimate first. 1M-token context is
+      # why it is the only option for the full-context experiment: the corpus is
+      # ~124K tokens and NIM timed out on it.
+      model: deepseek/deepseek-v4-flash-0731
+      usd_per_million_input: 0.0675
+      usd_per_million_output: 0.135
     hf:
       base_url: https://router.huggingface.co/v1
       api_key_env: HF_TOKEN
+      # Balance exhausted 2026-08-15. Kept for provenance: it produced the
+      # Phase 1 baseline.
       model: meta-llama/Llama-3.3-70B-Instruct
+      usd_per_million_input: 0.0
+      usd_per_million_output: 0.0
 
 judge:
   # The RAGAS judge. Configured separately from `generator` on purpose: the
@@ -314,13 +333,19 @@ judge:
   # came back None with 4/4 items failed on a 5-item smoke. A structured-output
   # consumer needs a model that emits structure, not one that reasons well.
   #
-  # Falling back to the generator's own model. This is a real compromise, not a
-  # free choice: a model judging its own output scores itself generously, so
-  # faithfulness here is an upper bound and must be read as one. Recorded rather
-  # than hidden. Revisit if a non-reasoning model of a different family appears
-  # on the free tier.
-  provider: nim
-  model: google/gemma-4-31b-it
+  # ALSO REJECTED 2026-08-16: nim/google/gemma-4-31b-it. It generates fine, but
+  # as a RAGAS judge the NIM endpoint returned HTTP 500 on every single call —
+  # server errors, not rate limiting. With retries the run projected to 7h51m
+  # for 158 jobs. Generation-capable does not imply judge-capable on a free tier.
+  #
+  # Now on OpenRouter, which means the judge and the generator are the same
+  # model when the generator is also OpenRouter. That is a real compromise, not
+  # a free choice: a model judging its own output scores itself generously, so
+  # faithfulness must be read as an UPPER BOUND. Recorded rather than hidden.
+  # The fix is a second cheap OpenRouter model of a different family — set
+  # `model` below and independence is restored without touching code.
+  provider: openrouter
+  model: ""
 
   # Throttling, and why it needs its own numbers.
   #
@@ -337,4 +362,8 @@ judge:
   requests_per_minute: 30
   max_workers: 4
   timeout_seconds: 180
-  max_retries: 6
+  # Lowered from 6. Retries are worth paying for on 429s and transient blips;
+  # they are pure waste against a hard 500, which is what NIM returned on every
+  # call. Six attempts turned each failure into ~30s of backoff and projected a
+  # 158-job run to nearly eight hours.
+  max_retries: 3

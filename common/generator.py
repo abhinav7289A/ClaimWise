@@ -246,7 +246,11 @@ class OpenAICompatGenerator:
 
 
 def build_generator(
-    config: dict[str, Any], provider: str | None = None, model: str | None = None
+    config: dict[str, Any],
+    provider: str | None = None,
+    model: str | None = None,
+    timeout_seconds: int | None = None,
+    max_retries: int | None = None,
 ) -> OpenAICompatGenerator:
     """Construct the configured generator, reading its API key from the env.
 
@@ -254,6 +258,15 @@ def build_generator(
         config: Parsed `config.yaml`.
         provider: Override `generator.provider`.
         model: Override the provider's configured model.
+        timeout_seconds: Override `generator.timeout_seconds`. The default 60 is
+            sized for RAG prompts of ~1,500 tokens. Prefill time scales with
+            input length, so a workload that sends a 124K-token prompt needs a
+            different figure entirely — 60 seconds there is a timeout by
+            construction, not a transient failure.
+        max_retries: Override `generator.max_retries`. Worth lowering for very
+            large prompts: the default backoff assumes retries are cheap, but
+            re-sending 124K tokens pays the same prefill again, so three retries
+            turn one slow request into four.
 
     Returns:
         A ready-to-use generator.
@@ -289,8 +302,14 @@ def build_generator(
         model=model or provider_config["model"],
         temperature=cfg_get(config, "generator.temperature", 0.0),
         max_tokens=cfg_get(config, "generator.max_tokens", 1024),
-        timeout_seconds=cfg_get(config, "generator.timeout_seconds", 60),
-        max_retries=cfg_get(config, "generator.max_retries", 4),
+        timeout_seconds=(
+            timeout_seconds
+            if timeout_seconds is not None
+            else cfg_get(config, "generator.timeout_seconds", 60)
+        ),
+        max_retries=(
+            max_retries if max_retries is not None else cfg_get(config, "generator.max_retries", 4)
+        ),
         requests_per_minute=cfg_get(config, "generator.requests_per_minute", 30),
     )
 

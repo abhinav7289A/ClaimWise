@@ -60,7 +60,7 @@ from tqdm import tqdm
 from common.config import DEFAULT_CONFIG_PATH, cfg_get, load_config
 from common.generator import build_generator
 from phase1_rag.rag_chain import CITATION_PATTERN, SYSTEM_PROMPT
-from phase2_advanced.parent_docs import load_pages
+from phase2_advanced.parent_docs import load_pages, load_parent_store
 
 LOGGER = logging.getLogger("claimwise.full_context")
 
@@ -141,26 +141,45 @@ def load_golden(path: Path, verified_only: bool) -> list[dict[str, Any]]:
 
 
 def estimate_cost(
-    corpus_chars: int, question_count: int, usd_per_million: float
+    corpus_chars: int,
+    question_count: int,
+    usd_per_million_input: float,
+    usd_per_million_output: float,
+    expected_output_tokens: int = 150,
 ) -> dict[str, Any]:
     """Estimate the spend before any call is made.
+
+    Input and output are priced separately because they differ by 2x on the
+    configured provider and, for this workload, are wildly asymmetric: ~124,000
+    tokens in against ~150 out. A blended rate applied to a blended total would
+    be wrong in both directions at once.
 
     Args:
         corpus_chars: Length of the assembled corpus prompt.
         question_count: Questions to be asked.
-        usd_per_million: Configured price per million tokens.
+        usd_per_million_input: Provider's input price per million tokens.
+        usd_per_million_output: Provider's output price per million tokens.
+        expected_output_tokens: Assumed answer length. Deliberately generous —
+            an estimate that under-predicts spend is worse than one that
+            over-predicts it.
 
     Returns:
         The estimate, for printing and for recording alongside results.
     """
     tokens_per_query = corpus_chars // CHARS_PER_TOKEN
-    total_tokens = tokens_per_query * question_count
+    total_input = tokens_per_query * question_count
+    total_output = expected_output_tokens * question_count
+    input_usd = total_input / 1_000_000 * usd_per_million_input
+    output_usd = total_output / 1_000_000 * usd_per_million_output
     return {
         "corpus_chars": corpus_chars,
         "estimated_tokens_per_query": tokens_per_query,
         "questions": question_count,
-        "estimated_total_tokens": total_tokens,
-        "estimated_usd": round(total_tokens / 1_000_000 * usd_per_million, 4),
+        "estimated_input_tokens": total_input,
+        "estimated_output_tokens": total_output,
+        "estimated_input_usd": round(input_usd, 4),
+        "estimated_output_usd": round(output_usd, 4),
+        "estimated_usd": round(input_usd + output_usd, 4),
     }
 
 
@@ -205,6 +224,100 @@ def answer_from_corpus(
         completion_tokens=result.completion_tokens,
         latency_seconds=round(latency, 3),
     )
+
+
+def answer_via_rag(
+    items: list[dict[str, Any]], config: dict[str, Any], generator: Any, refusal_text: str
+) -> list[StuffedAnswer]:
+    """Answer the same questions through the configured RAG pipeline.
+
+    Exists so the comparison is honest. `cited_correctly` — did the model cite a
+    page the golden set expects — has no counterpart in `run_ragas.py`, which
+    measures citation *validity* (were cited pages among those retrieved). Those
+    are different questions, and quoting stuffing's 0.30 against the RAG
+    pipeline's hit@5 would compare a generation metric with a retrieval one.
+
+    Returning the same dataclass means `summarise()` computes both sides with
+    the same code, so the two columns cannot drift apart. The generator is
+    shared too, which removes the other confound: stuffing on a paid endpoint
+    against RAG on a rate-limited free tier measures the provider's queue, not
+    the architecture.
+
+    Args:
+        items: The golden items to answer.
+        config: Parsed `config.yaml`.
+        generator: The same generator used for stuffing.
+        refusal_text: Exact refusal sentence.
+
+    Returns:
+        One record per item, in the same shape as the stuffed answers.
+    """
+    import argparse as _argparse
+
+    from qdrant_client import QdrantClient
+    from sentence_transformers import SentenceTransformer
+
+    from phase1_rag.embed_index import collection_name_for
+    from phase1_rag.rag_chain import answer_question
+    from phase1_rag.rag_chain import resolve_settings as resolve_rag_settings
+
+    settings = resolve_rag_settings(
+        config, _argparse.Namespace(top_k=None, embed_model=None, user_id=None)
+    )
+    embedder = SentenceTransformer(settings["embed_model"], device=settings["device"])
+    collection_name = collection_name_for(settings["collection_prefix"], settings["embed_model"])
+
+    reranker = None
+    if settings["rerank"]:
+        from phase2_advanced.rerank import build_reranker
+
+        reranker = build_reranker(config)
+
+    parents = None
+    if settings["chunk_policy"]:
+        parents = load_parent_store(config, parents_path=Path(settings["parents_path"]))
+
+    LOGGER.info("RAG baseline: collection %s, rerank=%s", collection_name, bool(reranker))
+
+    answers: list[StuffedAnswer] = []
+    client = QdrantClient(path=settings["qdrant_path"])
+    try:
+        for item in tqdm(items, desc="RAG", unit="q"):
+            started = time.perf_counter()
+            try:
+                result = answer_question(
+                    item["question"],
+                    client=client,
+                    collection_name=collection_name,
+                    embedder=embedder,
+                    generator=generator,
+                    settings=settings,
+                    reranker=reranker,
+                    parents=parents,
+                )
+            except RuntimeError as error:
+                LOGGER.error("Item %s failed: %s", item["id"], error)
+                continue
+
+            expected = list(item.get("ground_truth_pages") or [])
+            answers.append(
+                StuffedAnswer(
+                    item_id=item["id"],
+                    question=item["question"],
+                    answer=result.answer,
+                    cited_pages=result.cited_pages,
+                    ground_truth_pages=expected,
+                    cited_correctly=bool(set(result.cited_pages) & set(expected)),
+                    refused=result.refused,
+                    should_refuse=not expected,
+                    prompt_tokens=result.prompt_tokens,
+                    completion_tokens=result.completion_tokens,
+                    latency_seconds=round(time.perf_counter() - started, 3),
+                )
+            )
+    finally:
+        client.close()
+    return answers
 
 
 def summarise(answers: list[StuffedAnswer]) -> dict[str, Any]:
@@ -275,7 +388,31 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--limit", type=int, default=10, help="Questions to ask.")
     parser.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help=(
+            "Per-request timeout. Defaults far above generator.timeout_seconds (60) because "
+            "prefill scales with input length and this prompt is ~83x a RAG prompt."
+        ),
+    )
+    parser.add_argument(
+        "--max-retries",
+        type=int,
+        default=1,
+        help="Kept low: re-sending a 124K-token prompt pays the whole prefill again.",
+    )
+    parser.add_argument(
         "--estimate-only", action="store_true", help="Print the cost estimate and stop."
+    )
+    parser.add_argument(
+        "--rag-baseline",
+        action="store_true",
+        help=(
+            "Also answer the same questions through the configured RAG pipeline, using the "
+            "same generator, and print both columns side by side. Adds ~1.5K tokens per "
+            "question — negligible next to stuffing's ~121K."
+        ),
     )
     parser.add_argument(
         "--yes",
@@ -317,15 +454,29 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.error("No items to evaluate. Pass --allow-unverified for a provisional run.")
         return 1
 
-    usd_per_million = cfg_get(config, "eval.estimated_usd_per_million_tokens", 0.7)
-    estimate = estimate_cost(len(corpus), len(items), usd_per_million)
+    # Price the provider that will actually serve the run, not a blended
+    # average across providers with a 10x spread between them.
+    provider_name = args.provider or cfg_get(config, "generator.provider", "nim")
+    provider_config = cfg_get(config, f"generator.providers.{provider_name}", {})
+    price_in = provider_config.get("usd_per_million_input", 0.0)
+    price_out = provider_config.get("usd_per_million_output", 0.0)
+    estimate = estimate_cost(len(corpus), len(items), price_in, price_out)
+    estimate["provider"] = provider_name
+    estimate["model"] = args.model or provider_config.get("model", "?")
 
     print("\n=== FULL-CONTEXT STUFFING — PRE-FLIGHT ===")
+    print(f"provider/model        : {provider_name}/{estimate['model']}")
+    print(f"price per 1M tokens   : ${price_in} in / ${price_out} out")
     print(f"corpus                : {estimate['corpus_chars']:,} chars "
           f"(~{estimate['estimated_tokens_per_query']:,} tokens)")
     print(f"questions             : {estimate['questions']}")
-    print(f"estimated total tokens: {estimate['estimated_total_tokens']:,}")
-    print(f"estimated cost        : ~${estimate['estimated_usd']}")
+    print(f"estimated input       : {estimate['estimated_input_tokens']:,} tokens "
+          f"= ${estimate['estimated_input_usd']}")
+    print(f"estimated output      : {estimate['estimated_output_tokens']:,} tokens "
+          f"= ${estimate['estimated_output_usd']}")
+    print(f"ESTIMATED COST        : ~${estimate['estimated_usd']}")
+    if price_in == 0.0:
+        print("  (free tier — costs time and rate limits, not money)")
     print(f"RAG sends ~1,475 tokens/query — this is "
           f"~{estimate['estimated_tokens_per_query'] // 1475}x that.")
 
@@ -342,9 +493,17 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    generator = build_generator(config, provider=args.provider, model=args.model)
+    generator = build_generator(
+        config,
+        provider=args.provider,
+        model=args.model,
+        timeout_seconds=args.timeout,
+        max_retries=args.max_retries,
+    )
     refusal_text = cfg_get(config, "rag.refusal_text", "")
-    print(f"\ngenerator             : {generator.provider}/{generator.model}\n")
+    print(f"\ngenerator             : {generator.provider}/{generator.model}")
+    print(f"timeout               : {args.timeout}s (config default is "
+          f"{cfg_get(config, 'generator.timeout_seconds', 60)}s, sized for ~1.5K-token prompts)\n")
 
     answers: list[StuffedAnswer] = []
     for item in tqdm(items, desc="Stuffing", unit="q"):
@@ -361,8 +520,12 @@ def main(argv: list[str] | None = None) -> int:
 
     metrics = summarise(answers)
     metrics["estimate"] = estimate
+    # Billed from the provider's own token accounting, not our 4-chars-per-token
+    # approximation. This is the figure that goes in the budget ledger.
     metrics["actual_usd"] = round(
-        metrics["tokens"]["prompt"] / 1_000_000 * usd_per_million, 4
+        metrics["tokens"]["prompt"] / 1_000_000 * price_in
+        + metrics["tokens"]["completion"] / 1_000_000 * price_out,
+        4,
     )
 
     print("\n=== FULL-CONTEXT RESULTS ===")
@@ -375,8 +538,50 @@ def main(argv: list[str] | None = None) -> int:
     print(f"latency median/p95    : {metrics['latency_seconds']['median']} / "
           f"{metrics['latency_seconds']['p95']} s")
     print(f"actual spend          : ~${metrics['actual_usd']}")
-    print("\nCompare against the RAG pipeline's run_ragas.py numbers on the")
-    print("same questions. Tokens and latency are the axes that decide this.")
+
+    rag_metrics: dict[str, Any] | None = None
+    if args.rag_baseline:
+        # Guarded, and the guard is not defensive programming for its own sake.
+        # The expensive work is already done and paid for by this point. Three
+        # separate times in this project a failure *after* a paid call has
+        # discarded results that cost real money or an hour of runtime (P-18,
+        # twice here). The comparison column is a nice-to-have; the stuffing
+        # numbers above are the thing that was bought.
+        rag_answers = []
+        try:
+            rag_answers = answer_via_rag(items, config, generator, refusal_text)
+        except Exception as error:  # noqa: BLE001 — never lose paid results to a free extra
+            LOGGER.error(
+                "RAG baseline failed (%s: %s). Stuffing results below are unaffected "
+                "and will still be written.",
+                type(error).__name__,
+                error,
+            )
+        if rag_answers:
+            rag_metrics = summarise(rag_answers)
+            rag_metrics["actual_usd"] = round(
+                rag_metrics["tokens"]["prompt"] / 1_000_000 * price_in
+                + rag_metrics["tokens"]["completion"] / 1_000_000 * price_out,
+                4,
+            )
+
+            stuffed_tokens = metrics["tokens"]["mean_prompt_per_query"]
+            rag_tokens = rag_metrics["tokens"]["mean_prompt_per_query"]
+            print("\n=== STUFFING vs RAG — same questions, same generator ===")
+            print(f"{'metric':<24} {'stuffing':>14} {'RAG':>14}")
+            print(f"{'cited correctly':<24} {str(metrics['cited_correctly_rate']):>14} "
+                  f"{str(rag_metrics['cited_correctly_rate']):>14}")
+            print(f"{'prompt tokens/query':<24} {stuffed_tokens:>14,} {rag_tokens:>14,}")
+            print(f"{'median latency (s)':<24} "
+                  f"{metrics['latency_seconds']['median']:>14} "
+                  f"{rag_metrics['latency_seconds']['median']:>14}")
+            print(f"{'spend (10 q)':<24} {('$' + str(metrics['actual_usd'])):>14} "
+                  f"{('$' + str(rag_metrics['actual_usd'])):>14}")
+            if rag_tokens:
+                print(f"\nStuffing costs {stuffed_tokens / rag_tokens:.0f}x the tokens per query.")
+    else:
+        print("\nRe-run with --rag-baseline for a like-for-like comparison; without it,")
+        print("these numbers have no counterpart computed the same way.")
 
     results_dir = Path(cfg_get(config, "eval.results_dir", "evals/results"))
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -392,6 +597,7 @@ def main(argv: list[str] | None = None) -> int:
                 "provisional": bool(args.allow_unverified),
                 "generator": {"provider": generator.provider, "model": generator.model},
                 "metrics": metrics,
+                "rag_baseline": rag_metrics,
             },
             indent=2,
             ensure_ascii=False,

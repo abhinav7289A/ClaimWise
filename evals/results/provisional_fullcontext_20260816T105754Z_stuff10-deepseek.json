@@ -1,0 +1,39 @@
+{
+  "created_at": "2026-08-16T10:57:54+00:00",
+  "tag": "stuff10-deepseek",
+  "provisional": true,
+  "generator": {
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4-flash-0731"
+  },
+  "metrics": {
+    "answered": 10,
+    "positives": 10,
+    "negatives": 0,
+    "cited_correctly_rate": 0.3,
+    "false_refusal_rate": 0.0,
+    "refusal_accuracy": null,
+    "tokens": {
+      "prompt": 1209724,
+      "completion": 7579,
+      "mean_prompt_per_query": 120972
+    },
+    "latency_seconds": {
+      "median": 8.121,
+      "p95": 26.391
+    },
+    "estimate": {
+      "corpus_chars": 494874,
+      "estimated_tokens_per_query": 123718,
+      "questions": 10,
+      "estimated_input_tokens": 1237180,
+      "estimated_output_tokens": 1500,
+      "estimated_input_usd": 0.0835,
+      "estimated_output_usd": 0.0002,
+      "estimated_usd": 0.0837,
+      "provider": "openrouter",
+      "model": "deepseek/deepseek-v4-flash-0731"
+    },
+    "actual_usd": 0.0827
+  }
+}

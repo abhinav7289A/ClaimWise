@@ -250,9 +250,142 @@ Starting balance: **$30.00** (hard cap). $5.00 is reserved for Phase 5 and never
 |------|-----|----------------|-------------|-----------|
 |      | —   | —              | —           | $30.00    |
 
-## API spend (free tiers, tracked for the cost table)
+### 2.5 Generation-side results — the adopted pipeline
 
-| Date | Run | Provider | Est. cost |
-|------|-----|----------|-----------|
+Run `mx-rr20-gen`, 2026-08-16. Pipeline: dense top-5 + rerank@20 +
+chunk-policy/parent-expansion, collection `claimwise_mx__baai_bge_small_en_v1_5`.
+Generator **and** judge `openrouter/deepseek-v4-flash-0731`. Spend $0.1453.
+
+**Attributable — deterministic, no judge involved:**
+
+| Metric | Phase 1 baseline (HF) | Phase 2 (mx-rr20) | Δ |
+|---|---|---|---|
+| **Positives with evidence** | 59 / 85 | **74 / 85** | **+15 items** |
+| **Hallucinations (absolute)** | 20 of 26 | **10 of 11** | **halved** |
+| Citation validity | 0.958 | 0.962 | flat |
+| Citation coverage | 0.923 | 0.963 | +4.0 |
+| False refusals | 1 (g-008) | 3 (g-035, g-074, g-082) | worse |
+| Refusal accuracy (negatives) | 0.933 | 0.933 | flat |
+| Tokens per query | 1,475 | 2,075 | +41% (parent blocks) |
+| p50 latency | 1.6 s | 11.3 s | reranking on CPU |
+
+**+15 positives gained evidence** — hit@5 0.694 → 0.871 arriving generation-side,
+and the check that the chunk-policy wiring reaches the served pipeline.
+
+> **`ungrounded answers: 0.909` is a shrinking-denominator artifact, not a
+> regression.** It is 10/11 against the baseline's 20/26. Retrieval now fails on
+> 11 positives instead of 26, so the same defect over a smaller base reads
+> higher while absolute hallucinations halved. **Compare counts, not rates.**
+> The defect itself — the model answers rather than refusing when evidence is
+> missing — is unchanged and belongs to Phase 3's confidence gate and Phase 4's
+> RAFT negatives.
+
+**NOT attributable — do not quote as a Phase 2 delta:**
+
+| Metric | Baseline | This run |
+|---|---|---|
+| Faithfulness | 0.8289 | 0.7667 (**16 of 81 failed**) |
+| Answer relevancy | 0.8384 | 0.7978 |
+
+Three confounds stacked on an incomplete measurement: the generator changed
+(Llama-3.3-70B → DeepSeek), the judge changed *and became self-judging*
+(DeepSeek grading DeepSeek, so this is an upper bound), and faithfulness was
+computed on 65 of 81 items. Per P-18, a mean over survivors is not the mean over
+the set. A comparable pair would need one fixed generator and one fixed,
+independent judge across both runs.
+
+---
+
+### 2.6 Blog experiment — full-context stuffing vs RAG (technique 6)
+
+Same 10 golden questions, **same generator** (`openrouter/deepseek-v4-flash-0731`),
+so the only difference is the retrieval stage. Corpus is 494,874 chars (~124K
+tokens) against a 1M-token context window, so the whole thing genuinely fits.
+
+| Metric | Full-context stuffing | RAG pipeline | Advantage |
+|---|---|---|---|
+| Cited correctly | 0.20 | **0.60** | **3× RAG** |
+| Prompt tokens/query | 120,972 | **1,646** | **73× RAG** |
+| p50 latency | 36.5 s | **14.2 s** | 2.6× RAG |
+| Spend, 10 questions | $0.0829 | **$0.0017** | **49× RAG** |
+| False refusal rate | 0.0 | — | — |
+
+**Stuffing does not fail loudly — it fails plausibly.** It never refused. Every
+question got a confident answer; 8 of 10 simply cited the wrong page with all
+102 pages visible. Classic lost-in-the-middle.
+
+**Stuffing accuracy is unstable.** Three runs at `temperature=0` on identical
+inputs: **0.30, 0.40, 0.20**. Latency drifted too: 8.1 → 14.3 → 36.5 s p50.
+At n=10 this supports "clearly worse than RAG" and nothing more precise. The
+73× token ratio is arithmetic and is the finding that does not depend on sample
+size.
+
+**The structural finding, which is the most interesting part.** RAG gets
+citation validity *for free* — every `[p.N]` is checked against the retrieved
+set deterministically on every call (0.958 in §1.5). Stuffing cannot have that
+metric at all: with every page in context, no citation is ever invalid relative
+to what was retrieved, so nothing can be checked short of ground truth that does
+not exist at inference time. The simpler-looking architecture quietly gives up
+its own error detection — and it is the same signal Phase 4.5's GRPO reward was
+designed to optimise.
+
+**Caveat:** RAG's 14.2 s includes ~6 s of CPU cross-encoding, which moves to
+~0.1 s on `@spaces.GPU` in Phase 5. The latency gap is understated here, not
+overstated.
+
+---
+
+## OpenRouter budget ledger — the only paid inference path
+
+Starting balance: **~$2.00**, and it is expected to cover the rest of the
+project. Every OpenRouter run prints an estimate before spending. NIM and HF are
+free tiers priced at 0.0 in config, so anything with a non-zero cost here went
+through OpenRouter.
+
+Model: `deepseek/deepseek-v4-flash-0731` — **$0.0675 in / $0.135 out per 1M**,
+1M-token context. Chosen because it is the only configured model whose window
+fits the ~124K-token full-corpus prompt, which NIM timed out on.
+
+| Date | Run | Est. cost | Actual cost | Remaining |
+|------|-----|-----------|-------------|-----------|
+| 2026-08-16 | `stuff10-deepseek` | $0.0836 | $0.0827 | ~$1.917 |
+| 2026-08-16 | `stuff10` re-run (crashed after payment) | $0.0836 | $0.0829 | ~$1.834 |
+| 2026-08-16 | `stuff10-vs-rag` (stuffing + RAG column) | $0.0836 | $0.0846 | ~$1.750 |
+| 2026-08-16 | `mx-rr20-gen` (generation eval, gen + judge) | ~$0.045 | **$0.1453** | **~$1.605** |
+
+> The generation-eval estimate was **3× low**. I sized judge calls at ~2,500
+> tokens; RAGAS sends the full retrieved context per claim being verified, so a
+> faithfulness judgement costs far more than one question-and-answer pair. Use
+> ~$0.15 per 100-question judged run for planning, not $0.045.
+
+**~$0.25 spent, ~$1.75 remaining.** Estimates tracked actuals within ~1%, so the
+per-provider pricing added on 2026-08-16 can be trusted for planning.
+
+One run was wasted: the second crashed on a `NameError` *after* the paid calls
+completed, discarding the results file. The `--rag-baseline` block is now
+guarded so a failure in the free extra can never destroy paid results — the
+third instance of that pattern in this project (see P-18).
+
+**Reference points for planning:**
+
+| Workload | Input tokens | Cost |
+|---|---|---|
+| Full-context stuffing, 10 questions | 1.24 M | **~$0.09** |
+| Full-context stuffing, 100 questions | 12.4 M | ~$0.85 |
+| A full `run_ragas` generation eval (~100 q) | ~0.15 M | ~$0.02 |
+
+The stuffing experiment is ~40× more expensive per question than the entire RAG
+pipeline. Ten questions is enough to establish the shape of the trade; the full
+100 would consume nearly half the remaining budget to sharpen a number whose
+conclusion is already visible at n=10.
+
+## API spend on free tiers (no money, tracked for the cost comparison)
+
+| Date | Run | Provider | Notional cost |
+|------|-----|----------|---------------|
 | 2026-08-12 | `free2` generation eval | HF Inference | $0.1032 |
 | 2026-08-12 | `ragas-smoke` | HF Inference | $0.0105 |
+
+> These used the old blended `estimated_usd_per_million_tokens: 0.7`, which
+> overestimated DeepSeek by ~10×. Pricing is now per-provider in `config.yaml`.
+> Treat these two as notional.

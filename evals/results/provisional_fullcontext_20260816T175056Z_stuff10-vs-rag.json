@@ -1,0 +1,57 @@
+{
+  "created_at": "2026-08-16T17:50:56+00:00",
+  "tag": "stuff10-vs-rag",
+  "provisional": true,
+  "generator": {
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4-flash-0731"
+  },
+  "metrics": {
+    "answered": 10,
+    "positives": 10,
+    "negatives": 0,
+    "cited_correctly_rate": 0.2,
+    "false_refusal_rate": 0.0,
+    "refusal_accuracy": null,
+    "tokens": {
+      "prompt": 1209724,
+      "completion": 8900,
+      "mean_prompt_per_query": 120972
+    },
+    "latency_seconds": {
+      "median": 36.483,
+      "p95": 46.197
+    },
+    "estimate": {
+      "corpus_chars": 494874,
+      "estimated_tokens_per_query": 123718,
+      "questions": 10,
+      "estimated_input_tokens": 1237180,
+      "estimated_output_tokens": 1500,
+      "estimated_input_usd": 0.0835,
+      "estimated_output_usd": 0.0002,
+      "estimated_usd": 0.0837,
+      "provider": "openrouter",
+      "model": "deepseek/deepseek-v4-flash-0731"
+    },
+    "actual_usd": 0.0829
+  },
+  "rag_baseline": {
+    "answered": 10,
+    "positives": 10,
+    "negatives": 0,
+    "cited_correctly_rate": 0.6,
+    "false_refusal_rate": 0.1,
+    "refusal_accuracy": null,
+    "tokens": {
+      "prompt": 16457,
+      "completion": 4615,
+      "mean_prompt_per_query": 1646
+    },
+    "latency_seconds": {
+      "median": 14.2,
+      "p95": 43.201
+    },
+    "actual_usd": 0.0017
+  }
+}

@@ -1036,6 +1036,55 @@ recall gain that the reranker then fails to convert.
 
 ---
 
+### D-21 · Full-context stuffing loses to RAG on every axis
+**Date:** 2026-08-16 · **Cost:** $0.25 of the $2 OpenRouter budget
+
+**The claim tested.** "Long context windows make RAG obsolete — just put the
+whole document in the prompt." Worth measuring rather than asserting: at ~124K
+tokens against a 1M-token window, the ClaimWise corpus genuinely fits.
+
+**Setup.** Same 10 golden questions, same generator
+(`openrouter/deepseek-v4-flash-0731`), so the only difference is the retrieval
+stage. Running both through one generator was deliberate — an earlier pairing
+compared stuffing on a paid endpoint against RAG on a rate-limited free tier,
+which measures the provider's queue rather than the architecture.
+
+| Metric | Stuffing | RAG | Advantage |
+|---|---|---|---|
+| Cited correctly | 0.20 | **0.60** | **3×** |
+| Prompt tokens/query | 120,972 | **1,646** | **73×** |
+| p50 latency | 36.5 s | **14.2 s** | 2.6× |
+| Spend, 10 questions | $0.0829 | **$0.0017** | **49×** |
+
+**RAG wins on accuracy, tokens, latency and cost simultaneously.** There is no
+axis on which stuffing trades favourably here.
+
+**Stuffing fails plausibly, not loudly.** It never once refused. Every question
+received a confident answer, and 8 of 10 cited the wrong page while the right
+page sat in context. A silent wrong answer with a confident citation is the
+worst failure mode an insurance assistant can have.
+
+**The counter-argument that did not survive.** Stuffing cannot suffer a
+retrieval miss — every page Phase 2 fails to retrieve is *visible* to it. That
+should have been its advantage, and it did not materialise: having the page in
+context is not the same as finding it there.
+
+**The structural finding.** RAG gets citation validity for free — every `[p.N]`
+checked against the retrieved set, deterministically, on every call. Stuffing
+cannot have that metric at all: with every page in context nothing is ever
+invalid relative to what was retrieved, so verification requires ground truth
+that does not exist at inference time. **The simpler architecture gives up its
+own error detection**, and it is the same signal Phase 4.5's GRPO reward
+targets.
+
+**Honest limits.** n=10, and stuffing scored 0.30 / 0.40 / 0.20 across three
+identical `temperature=0` runs — ±10 points of noise, so the accuracy claim is
+"clearly worse", not a precise figure. RAG was measured once. The 73× token
+ratio is arithmetic and needs no sample size. RAG's 14.2 s also includes ~6 s of
+CPU reranking that becomes ~0.1 s on GPU, so the latency gap is understated.
+
+---
+
 ## Problems
 
 ### P-14 · RESOLVED — the cross-encoder *is* a usable confidence signal

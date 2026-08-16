@@ -1,0 +1,79 @@
+{
+  "created_at": "2026-08-16T19:24:52+00:00",
+  "tag": "mx-rr20-gen",
+  "provisional": true,
+  "generator": {
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4-flash-0731"
+  },
+  "top_k": 5,
+  "rerank": true,
+  "rerank_model": "BAAI/bge-reranker-base",
+  "rerank_depth": 20,
+  "chunk_policy": true,
+  "collection": "claimwise_mx__baai_bge_small_en_v1_5",
+  "free_metrics": {
+    "positives": 85,
+    "negatives": 15,
+    "citation_coverage": 0.963,
+    "citation_validity": 0.9615,
+    "fabricated_citation_items": [
+      "g-027",
+      "g-031",
+      "g-059"
+    ],
+    "positives_with_evidence": 74,
+    "positives_without_evidence": 11,
+    "false_refusal_rate": 0.0405,
+    "false_refusal_items": [
+      "g-035",
+      "g-074",
+      "g-082"
+    ],
+    "correct_refusal_rate": 0.0909,
+    "ungrounded_answer_rate": 0.9091,
+    "ungrounded_answer_items": [
+      "g-002",
+      "g-012",
+      "g-016",
+      "g-017",
+      "g-030",
+      "g-041",
+      "g-058",
+      "g-069",
+      "g-076",
+      "g-077"
+    ],
+    "refusal_accuracy": 0.9333,
+    "missed_refusal_items": [
+      "g-099"
+    ],
+    "latency_seconds": {
+      "median": 11.291,
+      "p95": 23.053
+    },
+    "tokens": {
+      "prompt": 167920,
+      "completion": 39625,
+      "total": 207545,
+      "mean_per_query": 2075
+    },
+    "estimated_usd": 0.1453
+  },
+  "ragas": {
+    "scored_items": 81,
+    "ragas_version": "0.4.3",
+    "shims_applied": [
+      "langchain_community.chat_models.vertexai"
+    ],
+    "judge_provider": "openrouter",
+    "judge_model": "deepseek/deepseek-v4-flash-0731",
+    "judge_requests_per_minute": 30,
+    "judge_max_workers": 4,
+    "answer_relevancy": 0.7978,
+    "answer_relevancy_failed": 0,
+    "faithfulness": 0.7667,
+    "faithfulness_failed": 16,
+    "_scored": 81
+  }
+}
