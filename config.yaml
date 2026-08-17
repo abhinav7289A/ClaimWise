@@ -217,6 +217,21 @@ parent_docs:
   # survives untouched and the "before" stays reproducible at any time.
   collection_prefix: claimwise_pd
 
+router:
+  # Phase 3, task 1. Routes by nearest labelled exemplar using the bge-small
+  # model already loaded for retrieval — no LLM call, ~30ms, deterministic.
+  #
+  # Exemplar questions live in phase3_agents/router.py, not here: they are the
+  # semantic definition of each route rather than a tunable, and forty example
+  # questions nested in YAML would be unreadable. This threshold IS a tunable.
+  #
+  # Below this gap between the best and second-best route, the decision is
+  # flagged ambiguous. Ambiguity is recorded rather than resolved — a question
+  # sitting between `lookup` and `calculation` is usually genuinely both, and
+  # the routes are additive, so the honest response is to note the closeness
+  # and let the escalation node decide what to do about it.
+  ambiguity_margin: 0.05
+
 chunk_policy:
   # Phase 2, technique 5. Chunk each document by its MEASURED page density
   # rather than applying one global size to the corpus.

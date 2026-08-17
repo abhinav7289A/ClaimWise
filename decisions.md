@@ -1085,7 +1085,109 @@ CPU reranking that becomes ~0.1 s on GPU, so the latency gap is understated.
 
 ---
 
+---
+
+# Phase 3 — Agentic Layer
+
+## Decisions
+
+### D-22 · Embedding-exemplar router REJECTED — worse than a constant
+**Date:** 2026-08-17
+
+**Design.** Route by nearest labelled exemplar: 32 example questions across
+`lookup` / `calculation` / `comparison` / `out_of_scope`, embedded with the
+bge-small model already loaded for retrieval. Zero LLM calls, ~30 ms,
+deterministic. Chosen over an LLM classifier because it could be evaluated for
+nothing — the same property that let Phase 2 reject hybrid search on evidence.
+
+**Result — decisively rejected:**
+
+| | Accuracy |
+|---|---|
+| Router, overall | **0.3587** |
+| **Majority-class baseline ("always lookup")** | **0.8370** |
+| Router on its *confident* decisions (29 of 92) | 0.4138 |
+| Router on ambiguous decisions (63 of 92) | 0.3333 |
+
+**Less than half as good as predicting one class every time.** And because even
+its confident subset scores 0.41, the fallback design — cheap pre-filter with an
+LLM handling the ambiguous remainder — dies with it. There is no subset of these
+decisions worth trusting.
+
+**Root cause: the embedder is trained for the wrong task.** bge-small matches a
+question to a passage containing its answer. It encodes *subject matter*, not
+*intent*, and routing is an intent decision. The misroutes are all the same
+shape:
+
+| Question | Routed | Matched exemplar |
+|---|---|---|
+| "How much **notice** will I get if terms change?" | calculation | "How much will the insurer **pay** for my surgery?" |
+| "Is angioplasty considered heart surgery?" | comparison | "Which of my **policies** is better for knee **surgery**?" |
+| "What safety gear for an ATV?" | out_of_scope | "How do I insure my **crops**?" |
+
+"How much notice" and "how much will you pay" are topically adjacent and
+intentionally opposite. Topic similarity cannot separate them, and no quantity of
+extra exemplars fixes a representation that does not encode the distinction.
+
+**This is the second failure of the same bi-encoder at a job it was not trained
+for.** P-14 found its score unusable as a confidence signal for the same reason.
+The pattern is worth stating: *a retrieval embedder is a retrieval embedder.*
+The cross-encoder, by contrast, works as a confidence signal (0.0985 on
+negatives vs 0.85–0.99 on hits) because relevance judgement is what it was
+trained on.
+
+**The router's own ambiguity flag was honest.** It marked 63 of 92 decisions
+low-margin, with margins as small as 0.0023 — it was reporting that it did not
+know, and it was right.
+
+**Decision.** Replace with an LLM classification call (option A). The cost
+objection stands — a call on every question, seconds of latency on the free tier
+— but 0.359 is not a starting point to optimise from. The measurement is exactly
+what justifies paying for the more expensive mechanism, which is why it was
+worth building the cheap one first: **~40 minutes to definitively close off a
+design**.
+
+**Kept, not deleted.** `router.py` remains as the evidence behind this entry and
+because its `--eval` harness, confusion matrix and majority-class baseline are
+what the LLM router will be measured with.
+
+**Methodological note for the blog.** The majority-class baseline was added
+*after* the first run reported 0.359 with no reference point. An accuracy figure
+without the trivial baseline beside it is how a classifier worse than a constant
+gets mistaken for a working one.
+
+---
+
 ## Problems
+
+### P-19 · The golden set held 8 duplicate questions, not 1
+**Date:** 2026-08-17 · **Status:** ✅ Resolved
+
+`failure_analysis_p1.md` recorded a single duplicate pair (`g-069`/`g-077`) and
+estimated its impact at ~1.2 points. That was generalised from the one pair
+inspected by hand. Running `clean_golden.py --write` found **eight**:
+`g-061`, `g-063`, `g-073`, `g-074`, `g-075`, `g-077`, `g-079`, `g-082`, each
+byte-identical to a surviving item.
+
+**Golden set: 100 items (85 pos / 15 neg) → 92 (77 pos / 15 neg).**
+
+**Impact: negligible, and measured rather than assumed.** Re-running the adopted
+pipeline on the cleaned set moved every figure by under one point — hit@5
+0.8706 → 0.8701, MRR 0.6501 → 0.6462. The duplicated questions were not
+systematically easier or harder than the rest, so they inflated the denominator
+without skewing the result. Phase 2's conclusions stand.
+
+**Root cause.** `build_eval_set.py` compared each generated question against its
+*source chunk* for vocabulary leakage but never against previously accepted
+questions. Boilerplate that repeats across documents produced the same
+paraphrase from different sampled chunks. Fixed by `question_fingerprint()`,
+which rejects a question whose sorted content-word set matches one already
+accepted.
+
+**Lesson.** The estimate of impact was wrong by 8x in count and roughly right in
+conclusion — but only by luck. Sampling one instance of a defect and
+extrapolating its frequency is not measurement; the whole point of a
+deterministic checker is that it counts instead of guessing.
 
 ### P-14 · RESOLVED — the cross-encoder *is* a usable confidence signal
 

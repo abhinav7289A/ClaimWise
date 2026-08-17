@@ -117,12 +117,44 @@ Prints a cost estimate before spending anything and refuses to run more than ten
 
 ---
 
+## `phase3_agents/` — the agentic layer
+
+### `phase3_agents/state.py`
+The contract every graph node reads from and writes to. Phases 1–2 were a straight line; a graph branches — the router sends a question one of four ways, the confidence gate can short-circuit to a refusal, the comparison path visits retrieval twice — and once control flow branches, nodes need one agreed place for their inputs and outputs or they end up coupled to each other's signatures. Written before any node exists, which is what lets the calculator, gate and router be built and tested independently in any order.
+
+Plain `TypedDict` with no LangGraph import: LangGraph consumes an ordinary TypedDict, so this module loads in a bare environment and the tools depending on it stay unit-testable before any graph is wired. `trace` and `assumptions` are first-class fields because an agent that produces a correct number without being able to say which nodes ran and what it assumed is not auditable — and for a claims figure that is the difference between a product and a demo. `out_of_scope` is a real route rather than an error path, since the golden set carries 15 hand-seeded unanswerable questions precisely because refusing well is a requirement.
+
+### `phase3_agents/router.py`
+Decides what runs *after* retrieval, not which pipeline runs — CLAUDE.md's motivating question ("is my knee surgery covered after 18 months **and** what will I get back on a ₹2.4L bill") is lookup and calculation at once, so four mutually exclusive pipelines would be the wrong shape. You cannot settle a claim without first retrieving the co-payment rate and its page, so `calculation` structurally contains `lookup`; the routes are additive and retrieval always runs except for `out_of_scope`.
+
+Classifies by nearest labelled exemplar using the bge-small model already loaded for retrieval: zero LLM calls, ~30 ms, deterministic. An LLM classifier would tax every question with a network round trip — seconds on the current free tier — and add a non-deterministic failure point before retrieval even starts. The decisive argument was measurability: this can be evaluated for nothing, the same property that let Phase 2 reject hybrid search on evidence.
+
+`out_of_scope` is an exemplar class rather than a similarity threshold, and P-14 is why: bi-encoder cosine on the 15 hand-seeded unanswerable questions averaged 0.6687, sitting inside the range genuine questions occupy, so no threshold separates them. Out-of-scope questions are recognised by resembling *other* out-of-scope questions — its exemplars are other insurance lines (motor, travel, marine, crop) rather than obvious nonsense, because a plausible insurance-shaped question about a policy the user does not own is the realistic failure. This is a different signal from the confidence gate, which uses the cross-encoder score (0.0985 on the same negatives, cleanly separated) and runs after retrieval: routing asks "what kind of question is this", the gate asks "did we actually find the answer".
+
+Scores each route by its best matching exemplar rather than the mean, since a route is the union of phrasings it covers, not their average. Records the nearest exemplar and the margin to the runner-up on every decision, so a misroute is diagnosed by reading one line. `--eval` measures accuracy against `golden.jsonl` and is explicit that it covers **2 of 4 routes** — the set holds 77 `lookup` and 15 `negative` labels, 8 positives with no label at all, and no `calculation` or `comparison` labels until the 50-task agent set exists.
+
+### `phase3_agents/claims_calculator.py`
+Deterministic claim settlement — **no LLM touches these numbers**. A wrong reimbursement figure is a liability, and a number produced inside a model cannot be audited, reproduced or unit-tested. The model's job is to read the policy and decide which values apply; converting those into rupees is this module's, and it does it identically every time.
+
+The order of operations *is* the domain: waiting period → non-payables → room-rent proportionate deduction → sub-limit → deductible → co-payment → sum insured. Each rule fires on the balance the previous one left, and the sequence is deliberately not configurable — the order is the logic, and a per-call ordering parameter would make two runs of the same claim incomparable. Step 3 is why the tool earns its place: exceed your eligible room rent and most Indian policies scale down *every associated charge* by the ratio of eligible to actual, so a ₹2,000/day upgrade can remove ₹73,000 from a ₹2.4L claim — far more than the co-payment, and no user predicts it.
+
+Every policy value arrives as a `PolicyTerm` carrying the page it was read from, never a bare float, so the arithmetic is auditable end to end and Phase 1's citation-validity machinery now covers the numbers as well as the prose; a term with no usable page is refused at construction. Absent terms are recorded in `assumptions` and flag the result `complete=False` rather than defaulting to zero — a missing co-payment means nobody read one, not that none applies, and a silent zero produces a confidently wrong figure. Malformed input raises instead of returning a plausible number. `--self-test` runs nine worked examples with hand-computed expectations, including one case built specifically to show that reordering the deductible and co-payment changes the answer (₹123,000 versus ₹125,333); pytest is not a project dependency, so verification ships inside the module.
+
+---
+
 ## `evals/` — evaluation harnesses
 
 ### `evals/retrieval_metrics.py`
 The free evaluation tier: runs every golden question through retrieval only — no generation, **zero LLM calls** — and reports hit@k, MRR, page recall, and latency percentiles, writing both a summary JSON and a per-item JSONL to `evals/results/`. Because it costs nothing and finishes in seconds, it is the harness Phase 2 runs after every single technique; `--baseline <previous.json>` prints the deltas that Phase 2's attribution table is built from.
 
 Reports hit at two strictnesses. **Page-level** counts any chunk from the correct page, matching how citations work; **exact-chunk** demands the specific source chunk. The gap between them distinguishes "found the right region, wrong passage" (a chunk-size problem) from "didn't find it at all" (an embedding problem). MRR is reported alongside hit@k because a reranker's whole job is moving correct pages *upward*, an improvement hit@5 alone would show as zero. Negatives have no page to find, so it reports their mean top-1 similarity instead — a high score there means refusal rests purely on the model's judgment rather than being backed by weak retrieval. Defaults to verified items only; `--allow-unverified` produces provisional numbers and stamps them as such in the output file so they can't be mistaken for a baseline.
+
+### `evals/clean_golden.py`
+Applies the two golden-set curation fixes identified in `metrics/failure_analysis_p1.md`: removes the duplicate question (`g-069`/`g-077` are byte-identical, so the set held 84 distinct positives while every hit@k was divided by 85) and rewrites the two customer-care questions to name their policy, because `18001021111` appears in both the SBI health and SBI home wordings and neither question said which — making the expected document arbitrary and a correct retrieval markable as wrong.
+
+Scoping was chosen over relaxed scoring deliberately. Accepting *any* document containing the answer is closer to what a user wants, but it adds a second scoring rule that applies to two items and nothing else — a special case inside the metric, which is where metrics start lying. Naming the policy is what a user with several policies would do anyway, and it keeps one rule for the whole set.
+
+Rewrites are declared in a table with their reasoning rather than derived by heuristic, because hand-curation of an evaluation set should be auditable line by line; each is applied only if the item still carries the question that was analysed, so a re-run cannot overwrite a later manual correction. Dry-run by default, preserves the pre-curation set to `golden.raw.jsonl` on first write so numbers recorded against it stay reproducible, and ends by saying plainly that the old hit@k figures must be re-measured rather than edited.
 
 ### `evals/run_ragas.py`
 The paid evaluation tier: answers every golden question through the full RAG chain, then scores the answers. Reports four metrics for **free** — citation validity (every `[p.N]` checked against pages actually retrieved), citation coverage, false refusal rate on positives, and refusal accuracy on negatives — plus latency, tokens per query and estimated spend. On top of that it runs RAGAS `faithfulness` and `answer_relevancy` through a judge model.
@@ -134,6 +166,9 @@ Deliberately runs only those two RAGAS metrics. `context_precision` costs one LL
 ---
 
 ## `metrics/`
+
+### `metrics/failure_analysis_p1.md`
+The Phase 1 exit criterion: the ten worst failures, analysed — deliberately written *after* Phase 2, because several of them survived every technique in it, and a failure nine pipelines cannot fix is usually not a pipeline failure. Concludes that three of the nine complete misses are **eval-set defects rather than retrieval failures**: `g-069` and `g-077` are byte-identical duplicates (so there are 84 distinct positives, not 85), and `g-030`/`g-058` both ask for the same customer-care number that appears in two different policies, making the "correct" document arbitrary. Documents the structural pattern — every miss is administrative boilerplate that repeats across all four documents, so the pipeline fails on exactly the content least specific to any one policy — and identifies the generation-side defect as the most serious item by volume: on the 11 positives where retrieval fails, the model answers rather than refusing 10 times. Ends with five numbered actions, two of which change every hit@k figure recorded so far and should therefore be done once, deliberately, with the corrected numbers recorded as a new baseline.
 
 ### `metrics/METRICS.md`
 The single source of truth for every number in the project. Pre-structured with tables for the Phase 1 corpus, chunking, and RAGAS baseline; the Phase 2 per-technique delta table; and the Modal credit ledger tracking the $30 hard cap (with $5 permanently reserved for Phase 5). Every row records date, git commit hash, config used, and the number. Nothing is written here that wasn't computed from a real run's pasted output.
@@ -178,7 +213,5 @@ Listed for orientation only — these files do not exist yet.
 
 | File | Planned role |
 |---|---|
-| `metrics/failure_analysis_p1.md` | Phase 1 exit criterion: the 10 worst failures, analysed. Still outstanding. |
-| `phase2_advanced/parent_docs.py` | Technique 3: parent-document / small-to-big retrieval — retrieve on small chunks, hand the reranker and the generator the larger surrounding block |
-| `phase2_advanced/query_rewrite.py` | Technique 4: query rewriting / multi-query |
-| `docs/blog/phase2.md` | Phase 2 write-up, including the hybrid negative result |
+| `phase3_agents/*` | Router, retrieval agent, claims calculator, comparison agent, confidence gate, agent eval harness |
+| `phase2_advanced/query_rewrite.py` | Technique 4 — **deliberately not built** (D-20). Listed so its absence reads as a decision, not an oversight. |

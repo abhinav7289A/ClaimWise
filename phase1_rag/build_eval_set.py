@@ -199,6 +199,33 @@ def vocabulary_overlap(question: str, chunk_text: str) -> float:
     return len(question_words & content_words(chunk_text)) / len(question_words)
 
 
+def question_fingerprint(question: str) -> str:
+    """Reduce a question to a form that makes duplicates comparable.
+
+    The existing leakage filter compares each question against its *source
+    chunk*, never against previously accepted questions. Two different sampled
+    chunks from the same page can therefore yield the same paraphrase — which is
+    exactly what happened: g-069 and g-077 are byte-identical, so the golden set
+    held 84 distinct positives while every hit@k was divided by 85, and one
+    retrieval failure was counted twice.
+
+    Deliberately an exact match on the sorted content-word set rather than a
+    fuzzy similarity threshold. Fuzzy matching would also collapse questions that
+    are genuinely distinct: g-002 ("notice before terms change", 30 days,
+    starhealth) and g-012 ("notice if product discontinued", 90 days, SBI) share
+    most of their wording and have different answers in different documents.
+    Rejecting those would silently shrink coverage. Exact fingerprinting catches
+    true duplicates and word-order variants while leaving near-misses alone.
+
+    Args:
+        question: The generated question.
+
+    Returns:
+        A canonical string; equal fingerprints mean duplicate questions.
+    """
+    return " ".join(sorted(content_words(question)))
+
+
 def parse_generation(raw: str) -> dict[str, str] | None:
     """Extract the JSON object from a model response.
 
@@ -602,6 +629,9 @@ def main(argv: list[str] | None = None) -> int:
     items: list[GoldenItem] = []
     rejections: Counter[str] = Counter()
     accepted_by_type: Counter[str] = Counter()
+    # Duplicate detection spans policy types on purpose: the same paraphrase can
+    # be generated from boilerplate that appears in several documents.
+    seen_questions: dict[str, str] = {}
 
     with tqdm(total=positives_wanted, desc="Generating", unit="q") as progress:
         for policy_type, target in positive_targets.items():
@@ -617,6 +647,18 @@ def main(argv: list[str] | None = None) -> int:
                 if item is None:
                     rejections[reason] += 1
                     continue
+
+                fingerprint = question_fingerprint(item.question)
+                if fingerprint in seen_questions:
+                    LOGGER.debug(
+                        "Duplicate question, already generated as %s: %r",
+                        seen_questions[fingerprint],
+                        item.question,
+                    )
+                    rejections["duplicate_question"] += 1
+                    continue
+                seen_questions[fingerprint] = item.id
+
                 items.append(item)
                 accepted_by_type[policy_type] += 1
                 progress.update(1)

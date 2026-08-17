@@ -161,6 +161,55 @@ _One row per technique, so every improvement is attributable._
 | 2026-08-15 | `97545ea+wt` | 3. Parent-document retrieval | 0.788 | −2.4 | 0.5826 | **0.906** @20 | 1,476 ms | ⚠️ **rejected globally, kept for routing (D-18)** |
 | 2026-08-16 | `97545ea+wt` | **5. Density-based chunk policy** | **0.871** | **+5.9** | **0.6501** | 0.894 @20 | 3,427 ms | ✅ **adopted (D-19)** |
 
+### 2.7 CORRECTED baseline on the cleaned golden set — 2026-08-17
+
+`evals/clean_golden.py --write` was run. It removed **8 duplicate questions, not
+the 1 recorded in `failure_analysis_p1.md`** — that document generalised from the
+single pair (`g-069`/`g-077`) that had been inspected by hand; the fingerprint
+found the rest. Removed: `g-061`, `g-063`, `g-073`, `g-074`, `g-075`, `g-077`,
+`g-079`, `g-082`, each byte-identical to a survivor. Two questions were scoped
+(`g-030`, `g-058`). Original preserved at `data/eval/golden.raw.jsonl`.
+
+**Golden set: 100 items (85 pos / 15 neg) → 92 items (77 pos / 15 neg).**
+
+Every metric recorded above §2.7 was computed on the 100-item set, where 8
+questions were double-weighted. Re-measured on the cleaned set, same pipeline
+(`mx-rr20-clean`):
+
+| Metric | Old set (100) | **Cleaned set (92)** | Δ |
+|---|---|---|---|
+| hit@5 (doc+page) | 0.8706 | **0.8701** | −0.001 |
+| hit@1 | 0.5294 | 0.5195 | −0.010 |
+| hit@3 | 0.7059 | 0.7143 | +0.008 |
+| hit@10 | 0.8824 | 0.8831 | +0.001 |
+| MRR | 0.6501 | 0.6462 | −0.004 |
+| health / home / life | 0.861 / 0.905 / 0.857 | 0.861 / 0.895 / 0.867 | — |
+
+**The duplicates were not biasing the result.** Every figure moves by less than
+one point, so the Phase 2 conclusions and the technique ranking stand as
+recorded. Complete misses drop 9 → 8 (`g-077` was the duplicate).
+
+Numbers above §2.7 are kept as measured rather than restated — they were
+correct for the set they ran against, and the delta here is the honest bridge.
+
+### Phase 3 — router
+
+| Date | Component | Result | Verdict |
+|---|---|---|---|
+| 2026-08-17 | Exemplar router (bge-small, 32 exemplars) | accuracy **0.359** | ❌ **rejected (D-22)** |
+
+| | Accuracy |
+|---|---|
+| Overall | 0.3587 |
+| **Majority-class baseline ("always lookup")** | **0.8370** |
+| Router when *confident* (29 decisions) | 0.4138 |
+| Router when ambiguous (63 decisions) | 0.3333 |
+
+Worse than a constant, and worse than a constant even on its own confident
+subset — so the hybrid "cheap pre-filter with LLM fallback" design is dead too.
+Measured on 2 of 4 routes; `calculation` and `comparison` have no labels until
+the 50-task set exists.
+
 ### Phase 2 exit criterion
 
 | | Value |
