@@ -33,6 +33,7 @@ import argparse
 import logging
 import os
 import sys
+import threading
 import time
 from collections import deque
 from dataclasses import dataclass
@@ -105,24 +106,36 @@ class RateLimiter:
         """
         self.requests_per_minute = requests_per_minute
         self._timestamps: deque[float] = deque()
+        # Guards the check-then-append below. `agent_eval --workers N` shares one
+        # generator across threads, and without this the length check and the
+        # append can interleave so N threads all decide there is room for one
+        # more — which turns a client-side throttle into a source of 429s.
+        self._lock = threading.Lock()
 
     def acquire(self) -> None:
-        """Block until issuing a request would not exceed the limit."""
+        """Block until issuing a request would not exceed the limit.
+
+        Written as a loop rather than the obvious recursive call so the lock can
+        be released while sleeping: a thread waiting out the window must not hold
+        it, or the throttle serialises every worker behind the slowest one.
+        """
         if self.requests_per_minute <= 0:
             return
 
-        now = time.monotonic()
-        while self._timestamps and now - self._timestamps[0] >= 60.0:
-            self._timestamps.popleft()
+        while True:
+            with self._lock:
+                now = time.monotonic()
+                while self._timestamps and now - self._timestamps[0] >= 60.0:
+                    self._timestamps.popleft()
 
-        if len(self._timestamps) >= self.requests_per_minute:
-            sleep_for = 60.0 - (now - self._timestamps[0]) + 0.05
+                if len(self._timestamps) < self.requests_per_minute:
+                    self._timestamps.append(now)
+                    return
+
+                sleep_for = 60.0 - (now - self._timestamps[0]) + 0.05
+
             LOGGER.debug("Rate limit reached; sleeping %.2fs", sleep_for)
             time.sleep(max(sleep_for, 0.0))
-            self.acquire()
-            return
-
-        self._timestamps.append(time.monotonic())
 
 
 class OpenAICompatGenerator:

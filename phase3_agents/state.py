@@ -75,6 +75,12 @@ class AgentState(TypedDict, total=False):
         invalid_citations: Cited pages absent from `retrieved` — fabricated, and
             free to detect. The same signal Phase 4.5's reward function targets.
         refused: Whether the answer is the exact configured refusal sentence.
+        figure_corrupted: True when the generator failed to reproduce a figure
+            the calculator computed. Measured 2026-08-20: the model was handed
+            ₹240,000 with an explicit instruction not to recompute, and wrote
+            ₹240,0000. Deterministic to detect and free, like `invalid_citations`
+            — and the same shape of signal Phase 4.5's numeric-correctness reward
+            is built on.
 
         escalate: Whether this question should go to a human.
         escalation_reason: Why, for the monitoring dashboard in Phase 5.
@@ -107,6 +113,7 @@ class AgentState(TypedDict, total=False):
     cited_pages: list[int]
     invalid_citations: list[int]
     refused: bool
+    figure_corrupted: bool
 
     escalate: bool
     escalation_reason: str

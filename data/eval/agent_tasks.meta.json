@@ -1,0 +1,25 @@
+{
+  "total": 50,
+  "by_route": {
+    "lookup": 14,
+    "calculation": 14,
+    "comparison": 12,
+    "out_of_scope": 10
+  },
+  "majority_class_baseline": 0.28,
+  "by_document": {
+    "star": 24,
+    "sbih": 19,
+    "home": 7,
+    "life": 3
+  },
+  "calculation_runnable": 12,
+  "requires_unimplemented": [
+    "t-027",
+    "t-028"
+  ],
+  "requires_assumption": [
+    "t-025",
+    "t-039"
+  ]
+}

@@ -1,0 +1,169 @@
+{
+  "positives": 40,
+  "negatives": 10,
+  "hit_at_k_page": {
+    "1": 0.275,
+    "3": 0.5,
+    "5": 0.625,
+    "10": 0.675,
+    "20": 0.725
+  },
+  "hit_at_k_chunk": {
+    "1": 0.0,
+    "3": 0.0,
+    "5": 0.0,
+    "10": 0.0,
+    "20": 0.0
+  },
+  "hit_at_k_loose": {
+    "1": 0.275,
+    "3": 0.525,
+    "5": 0.625,
+    "10": 0.675,
+    "20": 0.725
+  },
+  "docs_covered_at_k": {
+    "1": 0.15,
+    "3": 0.4,
+    "5": 0.475,
+    "10": 0.575,
+    "20": 0.625
+  },
+  "mrr": 0.4092,
+  "page_recall_at_5": 0.55,
+  "by_question_type": {
+    "calculation": {
+      "items": 14,
+      "hit_at_5_page": 0.5714,
+      "docs_covered_at_5": 0.5714,
+      "mrr": 0.3435,
+      "missed_item_ids": [
+        "t-015",
+        "t-016",
+        "t-019",
+        "t-020",
+        "t-021"
+      ]
+    },
+    "comparison": {
+      "items": 12,
+      "hit_at_5_page": 0.75,
+      "docs_covered_at_5": 0.25,
+      "mrr": 0.4986,
+      "missed_item_ids": [
+        "t-033",
+        "t-039",
+        "t-040"
+      ]
+    },
+    "lookup": {
+      "items": 14,
+      "hit_at_5_page": 0.5714,
+      "docs_covered_at_5": 0.5714,
+      "mrr": 0.3983,
+      "missed_item_ids": [
+        "t-001",
+        "t-003",
+        "t-008"
+      ]
+    }
+  },
+  "multi_document": {
+    "items": 12,
+    "item_ids": [
+      "t-029",
+      "t-030",
+      "t-031",
+      "t-032",
+      "t-033",
+      "t-034",
+      "t-035",
+      "t-036",
+      "t-037",
+      "t-038",
+      "t-039",
+      "t-040"
+    ],
+    "hit_at_k_page": {
+      "1": 0.4167,
+      "3": 0.5,
+      "5": 0.75,
+      "10": 0.75,
+      "20": 0.75
+    },
+    "docs_covered_at_k": {
+      "1": 0.0,
+      "3": 0.1667,
+      "5": 0.25,
+      "10": 0.4167,
+      "20": 0.4167
+    },
+    "partially_covered_at_5": [
+      "t-030",
+      "t-031",
+      "t-035",
+      "t-036",
+      "t-037",
+      "t-038"
+    ]
+  },
+  "latency_ms": {
+    "median": 8868.23,
+    "p95": 11370.75
+  },
+  "by_policy_type": {
+    "health": {
+      "items": 30,
+      "hit_at_5_page": 0.5333,
+      "mrr": 0.3529
+    },
+    "home": {
+      "items": 4,
+      "hit_at_5_page": 1.0,
+      "mrr": 0.6875
+    },
+    "life": {
+      "items": 2,
+      "hit_at_5_page": 1.0,
+      "mrr": 0.75
+    },
+    "multi": {
+      "items": 4,
+      "hit_at_5_page": 0.75,
+      "mrr": 0.3833
+    }
+  },
+  "negatives_mean_top_score": 0.0697,
+  "missed_item_ids": [
+    "t-001",
+    "t-003",
+    "t-008",
+    "t-015",
+    "t-016",
+    "t-019",
+    "t-020",
+    "t-021",
+    "t-033",
+    "t-039",
+    "t-040"
+  ],
+  "created_at": "2026-08-19T20:32:50+00:00",
+  "tag": "tasks-mx-rr20",
+  "provisional": false,
+  "eval_set_kind": "agent_tasks",
+  "verification": "build-time machine verification (D-24): citations checked against pages.jsonl, rupee figures against claims_calculator",
+  "parent_docs": true,
+  "chunk_policy": true,
+  "candidates_after_expansion_median": 20.0,
+  "exact_chunk_comparable": false,
+  "rerank": true,
+  "rerank_depth": 20,
+  "hybrid": false,
+  "hybrid_config": null,
+  "rerank_model": "BAAI/bge-reranker-base",
+  "rerank_ms_median": 8782.96,
+  "embed_model": "BAAI/bge-small-en-v1.5",
+  "collection": "claimwise_mx__baai_bge_small_en_v1_5",
+  "retrieval_top_k": 20,
+  "golden_set": "data/eval/agent_tasks.jsonl"
+}

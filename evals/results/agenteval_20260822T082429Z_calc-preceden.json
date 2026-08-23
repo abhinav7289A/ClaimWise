@@ -1,0 +1,94 @@
+{
+  "created_at": "2026-08-22T08:24:29+00:00",
+  "tag": "calc-preceden",
+  "task_set": "data/eval/agent_tasks.jsonl",
+  "tasks_evaluated": 14,
+  "routes_filter": [
+    "calculation"
+  ],
+  "generator": {
+    "provider": "openrouter",
+    "model": ""
+  },
+  "agent": {
+    "tasks": 14,
+    "task_completion": 0.4286,
+    "tool_call_accuracy": 0.6429,
+    "escalation_rate": 1.0,
+    "avg_steps": 4.43,
+    "grounded_rate": 0.5714,
+    "docs_covered_rate": 0.5714,
+    "fabricated_citation_rate": 0.0,
+    "figure_corrupted_rate": 0.2857,
+    "latency_s": {
+      "median": 16.38,
+      "p95": 37.8
+    },
+    "tokens": {
+      "prompt": 0,
+      "completion": 0
+    },
+    "by_route": {
+      "calculation": {
+        "tasks": 14,
+        "task_completion": 0.4286,
+        "tool_call_accuracy": 0.6429,
+        "escalation_rate": 1.0,
+        "avg_steps": 4.43,
+        "failed_task_ids": [
+          "t-015",
+          "t-016",
+          "t-020",
+          "t-021",
+          "t-022",
+          "t-023",
+          "t-024",
+          "t-027"
+        ]
+      }
+    }
+  },
+  "plain_rag": {
+    "tasks": 14,
+    "task_completion": 0.0714,
+    "tool_call_accuracy": 0.0,
+    "escalation_rate": 0.0,
+    "avg_steps": 1.0,
+    "grounded_rate": 0.5714,
+    "docs_covered_rate": 0.5714,
+    "fabricated_citation_rate": 0.0,
+    "figure_corrupted_rate": 0.0,
+    "latency_s": {
+      "median": 16.19,
+      "p95": 79.24
+    },
+    "tokens": {
+      "prompt": 23417,
+      "completion": 9492
+    },
+    "by_route": {
+      "calculation": {
+        "tasks": 14,
+        "task_completion": 0.0714,
+        "tool_call_accuracy": 0.0,
+        "escalation_rate": 0.0,
+        "avg_steps": 1.0,
+        "failed_task_ids": [
+          "t-015",
+          "t-016",
+          "t-017",
+          "t-018",
+          "t-019",
+          "t-020",
+          "t-021",
+          "t-022",
+          "t-023",
+          "t-024",
+          "t-025",
+          "t-026",
+          "t-027"
+        ]
+      }
+    }
+  }
+}

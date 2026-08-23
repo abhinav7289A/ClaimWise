@@ -64,50 +64,165 @@ from phase3_agents.state import Route
 
 LOGGER = logging.getLogger("claimwise.router")
 
-# Labelled examples defining each route. Written to cover the *phrasings a user
-# would actually type*, including the vague ones — "will they pay for" is far
-# more common than "what is the reimbursement amount".
+# Labelled examples defining each route.
 #
-# `out_of_scope` deliberately samples other insurance lines (motor, travel,
-# marine, crop) rather than obvious nonsense. A question about car insurance is
-# the realistic failure: it is plausible, insurance-shaped, and absent from a
-# health/home/life corpus. Weather questions route themselves.
+# REVISED 2026-08-18 (D-25). The first set scored lookup recall 0.325 on the
+# golden set and 0.500 on the agent set. Diagnosis came from the misroutes'
+# `nearest_exemplar` field rather than from reading individual questions: three
+# exemplars accounted for 36 of the 52 stolen golden lookups. Each revision below
+# fixes a *stated defect in an exemplar*, not a specific failing test item —
+# fitting to the failures would tune the router to the eval set rather than to
+# the routing problem.
+#
+# The four principles, each derivable from the exemplar text alone:
+#
+# P1. LOOKUP MUST COVER THE CORPUS. The original ten were all health questions
+#     while the corpus is health, home and life. Home and life lookups had no
+#     representative at all and fell to whichever other route was nearest.
+#
+# P2. COMPARISON EXEMPLARS CARRY COMPARATIVE STRUCTURE, NOT DOMAIN NOUNS.
+#     "Should I claim under my health or my home policy?" stole 19 golden
+#     lookups by itself: its comparative frame is buried under "claim", "health"
+#     and "home policy", which appear in nearly every insurance question. The
+#     replacements keep "which of", "compare", "difference between", "both", and
+#     drop the domain vocabulary. The procedure name in "knee surgery" went for
+#     the same reason — it pulled two calculation questions across.
+#
+# P3. CALCULATION EXEMPLARS MUST CONTAIN THE USER'S OWN FIGURES. "How much will
+#     the insurer pay for my surgery?" stole 10: it is exactly the shape of a
+#     *limit lookup* ("how much does the policy pay for an air ambulance?"). The
+#     real discriminator is not the words "how much" but whether the user has
+#     supplied numbers of their own, so every exemplar here now carries some.
+#
+# P4. OUT-OF-SCOPE EXEMPLARS LEAD WITH THE OUT-OF-SCOPE DOMAIN. "Does my travel
+#     insurance cover flight cancellation?" stole 7, because "does my X cover Y"
+#     is the single commonest lookup phrasing in existence and the only
+#     out-of-scope signal in it is one adjective. Reworded noun-forward.
+#
+#     P4 WAS FIRST APPLIED TOO BROADLY, AND THE MEASUREMENT CAUGHT IT. The
+#     original exemplars were near-duplicates of `agent_tasks.jsonl`'s
+#     out_of_scope items — "What is the premium for car insurance?" against
+#     `t-041` "What premium would I pay to insure my Honda City?" — because the
+#     same author wrote both, two days apart. The first revision responded by
+#     replacing the whole line-set (motor, travel, marine, crop) with disjoint
+#     ones (fire, pet, mobile, cyber). Out-of-scope recall then collapsed:
+#     golden 0.533 -> 0.067, agent 0.900 -> 0.300.
+#
+#     The reason is that golden's 15 hand-seeded negatives ARE those lines —
+#     four travel, three motor, three marine/cargo, one crop — and golden is not
+#     contaminated, having been written in Phase 1 before this module existed.
+#     The removed exemplars were carrying real signal; only their overlap with
+#     the *agent* set was accidental. So the lines are restored, because "an
+#     insurance line we do not hold" is the correct feature for this route, and
+#     the contamination is reported as a caveat on the agent-set number instead
+#     of being hidden by crippling the exemplars. Golden is the trustworthy
+#     measurement for this route; the agent set is not.
+#
+# One deliberate imbalance, stated because it is a thumb on the scale: a route is
+# scored by its single best-matching exemplar, so a route with more exemplars has
+# more chances to win. `lookup` is the largest (22 against 8-10) because it is
+# the majority class in real traffic and the de-facto fallback — but that choice
+# helps it, and any lookup improvement must be read with that in mind.
 EXEMPLARS: dict[Route, list[str]] = {
     "lookup": [
+        # Health — what the corpus is mostly made of.
         "What is the waiting period for pre-existing diseases?",
         "Is maternity covered under this policy?",
         "What are the exclusions for dental treatment?",
         "Does the policy cover AYUSH treatment?",
-        "What is the room rent limit?",
-        "How do I file a claim?",
-        "What documents are needed for reimbursement?",
+        "What is the room rent limit under my plan?",
         "Is day care surgery covered?",
         "What is the grace period for renewal?",
         "Are ambulance charges covered?",
+        # A LIMIT lookup. Phrased with "how much" on purpose: the router must
+        # learn that "how much does the POLICY pay for X" is reading a stated
+        # figure out of the wording, while "how much will I get on MY bill" is
+        # arithmetic. Without this, P3's boundary has only one side.
+        "How much does the policy pay for an air ambulance?",
+        "What is the co-payment percentage in this policy?",
+        "Does the policy pay for treatment taken at home?",
+        "How long must I wait before a specific illness is covered?",
+        # Claims process — procedural lookups, not facts about cover.
+        "How do I file a claim?",
+        "What documents are needed for reimbursement?",
+        "Which number do I call to intimate a claim?",
+        "How many days do I have to inform the insurer after admission?",
+        # Home (P1) — previously unrepresented.
+        "Does my home policy cover theft of contents?",
+        "What depreciation applies to a damaged appliance?",
+        "Am I covered if a pipe bursts and damages my flat?",
+        "Do I need to tell the insurer before renovating my house?",
+        # Life (P1) — previously unrepresented.
+        "Can I withdraw money from my ULIP before maturity?",
+        "What happens to my policy if I stop paying premiums?",
     ],
     "calculation": [
+        # P3: every one states figures the user brought, not figures the policy
+        # states. That is the feature separating this route from a limit lookup.
         "What will I get back on a 2.4 lakh hospital bill?",
-        "How much will the insurer pay for my surgery?",
         "If my bill is 3 lakhs, how much do I have to pay myself?",
-        "What is my out-of-pocket cost after co-payment?",
-        "How much is deducted if I take a room above my limit?",
+        "My bill is 1.5 lakh and there is a 10% co-payment — what is payable?",
+        "How much is deducted if my room cost 6000 a day against a 4000 limit?",
         "Calculate my reimbursement for a 50000 rupee claim",
-        "What amount is payable after the deductible?",
+        "My bill came to 4.5 lakhs. What amount will the insurer settle?",
+        "What is my out-of-pocket cost on a 2 lakh claim after co-payment?",
+        "After a 25000 deductible, how much of my 1 lakh bill is paid?",
+        "What is payable on a 3 lakh claim if a 1 lakh sub-limit applies?",
         "How much of my 1.5 lakh claim will be settled?",
     ],
     "comparison": [
-        "Which of my policies is better for knee surgery?",
+        # P2, refined after over-applying it. The defect was ONE exemplar whose
+        # only content was high-frequency nouns ("claim", "health", "home
+        # policy"), which made it a generic insurance attractor. Stripping domain
+        # content from ALL of them made the route vague instead and cost it 0.917
+        # -> 0.750. These keep an explicit comparative marker — "which of",
+        # "compare", "difference", "both", "between" — AND a concrete policy
+        # feature to be compared.
+        "Which of my two policies has a shorter waiting period?",
         "Compare the room rent limits across my policies",
-        "Which policy has a shorter waiting period?",
-        "Should I claim under my health or my home policy?",
         "What is the difference between these two policies?",
         "Which of my plans covers maternity better?",
+        "Do both my policies apply the same co-payment?",
+        "Between my two insurers, which one pays more for the same treatment?",
+        "Is the pre-existing disease wait the same on both my policies?",
+        "Which policy gives the better no-claim bonus?",
+        "Do both policies deduct proportionately for a higher room category?",
+        "Which of my policies should I claim under for this?",
     ],
     "out_of_scope": [
+        # P4: the out-of-scope signal leads, and the insurance LINES are the
+        # load-bearing half — a question about motor or marine cover is the
+        # realistic failure, being plausible and insurance-shaped, where a
+        # weather question routes itself. Only the travel exemplar is reworded,
+        # noun-forward, since it was the one acting as a "does my X cover Y"
+        # attractor.
         "What is the premium for car insurance?",
-        "Does my travel insurance cover flight cancellation?",
+        "Travel insurance for an overseas trip — what does it include?",
         "How do I insure my crops against drought?",
         "What is marine cargo insurance?",
+        "What is professional indemnity insurance for a consultancy?",
+        "What is workmen's compensation insurance?",
+        # REMOVED 2026-08-19 — do not re-add a commercial-property exemplar here
+        # without first checking the home policy for the words you plan to use.
+        #
+        # It was added as "What does a fire insurance policy for a shop cover?",
+        # which was categorically wrong: it led with **fire**, a peril the SBI
+        # home policy actively covers, and pulled `g-051` (air conditioner fire,
+        # home p.6) into a refusal. Reworded to "What does a shopkeeper's policy
+        # cover for my business premises?" to lead with the commercial signal
+        # instead — which fixed g-051 and immediately took `g-045` in its place
+        # ("is my business covered if it's interrupted...", home p.16, which is
+        # business-interruption wording). Aggregate accuracy did not move: 0.6522
+        # before and after, one victim swapped for another.
+        #
+        # The rule both versions broke: AN OUT-OF-SCOPE EXEMPLAR MUST NAME
+        # SOMETHING THE CORPUS DOES NOT HOLD. The home policy holds both fire
+        # perils and business-interruption clauses, so neither phrasing was a
+        # clean signal. Commercial cover is still represented on this route by
+        # the professional-indemnity and workmen's-compensation exemplars, which
+        # name lines the corpus genuinely lacks.
+        "Is pet insurance available for my dog?",
+        # Outside insurance entirely.
         "What is the weather forecast for tomorrow?",
         "Can you help me file my income tax return?",
         "What is the stock price of this insurance company?",
@@ -254,34 +369,75 @@ def build_router(config: dict[str, Any], embedder: SentenceTransformer) -> Exemp
     )
 
 
-def evaluate(router: ExemplarRouter, golden_path: Path) -> dict[str, Any]:
-    """Measure routing accuracy against the golden set's labels.
+def load_labelled(path: Path) -> list[dict[str, Any]]:
+    """Read route labels from either eval set.
 
-    **This measures 2 of the 4 routes, and says so.** `golden.jsonl` contains 77
-    items labelled `lookup`, 15 labelled `negative`, and 8 positives carrying no
-    `question_type` at all. There are no `calculation` or `comparison` labels
-    until the Phase 3 50-task agent set exists, so this reports what it can and
-    is explicit about the rest rather than implying full coverage.
+    Two files carry routing labels and they spell them differently. `golden.jsonl`
+    predates the router and encodes the label as `question_type`, where
+    `"negative"` means out-of-scope and 8 positives carry no label at all.
+    `agent_tasks.jsonl` was built for this purpose and states `route` outright.
+
+    Normalising here rather than in `evaluate` keeps one scoring path for both
+    sets, so a number from the agent set and a number from the golden set are
+    produced by identical code and differ only in their inputs.
+
+    Args:
+        path: Path to `golden.jsonl` or `agent_tasks.jsonl`.
+
+    Returns:
+        Items as `{"id", "question", "expected"}`, skipping unlabelled ones.
+
+    Raises:
+        FileNotFoundError: If the file is missing.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(f"Labelled set not found: {path.resolve()}")
+
+    with path.open("r", encoding="utf-8") as handle:
+        rows = [json.loads(line) for line in handle if line.strip()]
+
+    labelled: list[dict[str, Any]] = []
+    for row in rows:
+        if "route" in row:
+            expected = row["route"]
+        elif row.get("question_type") == "negative":
+            expected = "out_of_scope"
+        elif row.get("question_type") == "lookup":
+            expected = "lookup"
+        else:
+            continue
+        labelled.append({"id": row["id"], "question": row["question"], "expected": expected})
+    return labelled
+
+
+def evaluate(router: ExemplarRouter, golden_path: Path) -> dict[str, Any]:
+    """Measure routing accuracy against a labelled set.
+
+    Coverage depends on which set is passed. `golden.jsonl` labels only `lookup`
+    and `out_of_scope` — 2 of the 4 routes — because it was built in Phase 1,
+    before routing existed. `agent_tasks.jsonl` labels all four and exists
+    specifically to close that gap.
+
+    The majority-class baseline is reported either way and it moves sharply
+    between the two: 0.837 on the golden set, which is overwhelmingly lookup, and
+    0.28 on the agent set, which is deliberately balanced. **An accuracy from one
+    set cannot be compared against a baseline from the other.**
 
     Args:
         router: The router under test.
-        golden_path: Path to `golden.jsonl`.
+        golden_path: Path to `golden.jsonl` or `agent_tasks.jsonl`.
 
     Returns:
         Per-class counts, accuracy, and the misroutes for inspection.
 
     Raises:
-        FileNotFoundError: If the golden set is missing.
+        FileNotFoundError: If the labelled set is missing.
     """
-    if not golden_path.is_file():
-        raise FileNotFoundError(f"Golden set not found: {golden_path.resolve()}")
-
-    with golden_path.open("r", encoding="utf-8") as handle:
-        items = [json.loads(line) for line in handle if line.strip()]
+    items = load_labelled(golden_path)
+    unlabelled = 0
 
     correct = 0
     scored = 0
-    unlabelled = 0
     confusion: dict[str, dict[str, int]] = {}
     misroutes: list[dict[str, Any]] = []
     ambiguous = 0
@@ -294,15 +450,7 @@ def evaluate(router: ExemplarRouter, golden_path: Path) -> dict[str, Any]:
     ambiguous_correct = 0
 
     for item in items:
-        question_type = item.get("question_type")
-        if question_type == "negative":
-            expected: Route = "out_of_scope"
-        elif question_type == "lookup":
-            expected = "lookup"
-        else:
-            unlabelled += 1
-            continue
-
+        expected: Route = item["expected"]
         decision = router.route(item["question"])
         scored += 1
         ambiguous += decision.ambiguous
@@ -353,8 +501,11 @@ def evaluate(router: ExemplarRouter, golden_path: Path) -> dict[str, Any]:
         "ambiguous_decisions": ambiguous,
         "confusion": confusion,
         "misroutes": misroutes,
-        "routes_covered": ["lookup", "out_of_scope"],
-        "routes_unmeasured": ["calculation", "comparison"],
+        # Derived from the data rather than hardcoded. The original constants
+        # became wrong the moment a second labelled set existed, and a stale
+        # "routes_unmeasured" would keep claiming a gap that had been closed.
+        "routes_covered": sorted(confusion),
+        "routes_unmeasured": sorted(set(EXEMPLARS) - set(confusion)),
     }
 
 
@@ -372,7 +523,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("-q", "--question", default=None, help="Route one question.")
     parser.add_argument(
-        "--eval", action="store_true", help="Measure accuracy against the golden set."
+        "--eval", action="store_true", help="Measure accuracy against a labelled set."
+    )
+    parser.add_argument(
+        "--tasks",
+        action="store_true",
+        help="Evaluate against data/eval/agent_tasks.jsonl (all 4 routes) instead of "
+        "golden.jsonl (lookup and out_of_scope only).",
     )
     parser.add_argument("--verbose", action="store_true")
     return parser
@@ -414,10 +571,15 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.eval:
         eval_dir = Path(cfg_get(config, "paths.eval_dir", "data/eval"))
-        golden_path = eval_dir / cfg_get(config, "eval.output_filename", "golden.jsonl")
+        golden_path = (
+            eval_dir / "agent_tasks.jsonl"
+            if args.tasks
+            else eval_dir / cfg_get(config, "eval.output_filename", "golden.jsonl")
+        )
         report = evaluate(router, golden_path)
 
         print("\n=== ROUTER ACCURACY ===")
+        print(f"set                : {golden_path.name}")
         print(f"scored             : {report['scored']}")
         print(f"unlabelled skipped : {report['unlabelled_skipped']}")
         print(f"accuracy           : {report['accuracy']}")

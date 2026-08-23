@@ -13,6 +13,8 @@ reordering two steps changes the answer by tens of thousands of rupees:
 
     1. Waiting period      -> ineligible means payable is zero, stop
     2. Non-payable items   -> consumables, gloves, admin (~5-10% of a bill)
+   2b. Depreciation        -> property only; pays what the item is worth now
+   2c. Withdrawal cap      -> unit-linked life only; a share of the fund
     3. Room-rent proportionate deduction
     4. Sub-limit           -> per-procedure cap
     5. Deductible
@@ -32,6 +34,15 @@ number.
 arithmetic auditable end to end — the answer can say "10% co-payment applies
 [p.39]" — and it extends Phase 1's citation-validity machinery to cover the
 numbers as well as the prose.
+
+The one exception is a term the **user** states in their own question, which
+arrives with `source_page=None`. It is used, because declining to compute with a
+number the user just gave is unhelpful, but it is never cited — see `PolicyTerm`.
+Where the question and the document disagree, precedence depends on the kind of
+number: the document wins on policy-wide rules (a co-payment percentage, a
+waiting period), the user wins on plan-scoped amounts (sum insured, deductible,
+sub-limit, room-rent cap) because one document lists several tiers of each.
+`term_extraction.merge_terms` implements that split and reports every clash.
 
 **Absent is not zero.** A missing co-payment term does not mean "no co-payment",
 it means nobody read one. Absent terms are recorded in `assumptions` and the
@@ -73,42 +84,82 @@ class InvalidClaimInput(ValueError):
 
 @dataclass(frozen=True)
 class PolicyTerm:
-    """One value read from a policy, with the page it was read from.
+    """One value used in a settlement, with where it came from.
+
+    Terms have two possible provenances and they are not interchangeable:
+
+    * **Document** (`source_page` is a page number) — read out of the policy by
+      retrieval. Citable, and the page goes into `cited_pages`.
+    * **User** (`source_page` is None) — asserted by the user in their own
+      question ("my policy has a 10% co-payment"). Usable, because refusing to
+      compute with a number the user just supplied is unhelpful, but **never
+      citable**: there is no page behind it, and inventing one would produce
+      exactly the fabricated citation the eval harness fails tasks for.
+
+    A page of 0 or a negative page is still rejected. That is a different thing
+    from None — it means a document term lost its page somewhere in the
+    pipeline, which is a bug, not a provenance.
 
     Attributes:
         value: The number itself — a percentage, a rupee cap, or a month count.
-        source_page: 1-indexed PDF page. Required, because an uncitable number
-            cannot appear in an answer this project is willing to give.
+        source_page: 1-indexed PDF page, or None for a user-asserted term.
         label: Human description for the breakdown, e.g. "co-payment 10%".
     """
 
     value: float
-    source_page: int
+    source_page: int | None
     label: str
 
     def __post_init__(self) -> None:
         """Validate the term.
 
         Raises:
-            InvalidClaimInput: If the page number is not a positive integer.
+            InvalidClaimInput: If a page number is present but not positive.
         """
-        if self.source_page < 1:
+        if self.source_page is not None and self.source_page < 1:
             raise InvalidClaimInput(
                 f"PolicyTerm {self.label!r} has no usable source page "
                 f"({self.source_page}). Every number in an answer must be citable."
             )
 
+    @property
+    def from_user(self) -> bool:
+        """Return True when the user supplied this term rather than the policy."""
+        return self.source_page is None
+
+    @property
+    def citation(self) -> str:
+        """Render this term's provenance for inclusion in a sentence.
+
+        Returns:
+            `" [p.39]"` for a document term, or a plain-language note for a
+            user-asserted one. Never a page number the user cannot check.
+        """
+        if self.source_page is None:
+            return " (as you stated it — not found in your policy)"
+        return f" [p.{self.source_page}]"
+
 
 @dataclass
 class ClaimRequest:
-    """Everything needed to settle one hospitalisation claim.
+    """Everything needed to settle one claim.
 
     Bill facts come from the user or an uploaded bill; policy terms come from
     retrieval and each carry a page. Terms left as None are treated as "not
     read" rather than "not applicable" — see the module docstring.
 
+    Most fields describe a hospitalisation claim, which is the dominant case.
+    Two groups extend that to the other products in the corpus, and both stay
+    None on a health claim so the health path is unchanged:
+
+    * **Property** (`depreciation_percent`) — a home policy pays the depreciated
+      value of a stolen or damaged item, not what it cost new.
+    * **Unit-linked life** (`fund_value`, `withdrawal_cap_percent`) — a ULIP caps
+      what may be withdrawn in a policy year at a percentage of the fund.
+
     Attributes:
-        claimed_amount: Total hospital bill, in rupees.
+        claimed_amount: Total hospital bill, in rupees. For a property claim the
+            item's stated value; for a ULIP, the amount requested.
         non_payable_amount: Consumables and similar heads the policy never pays.
         room_rent_per_day: Actual room rent charged per day.
         hospitalisation_days: Nights stayed; used only to sanity-check room rent.
@@ -117,6 +168,7 @@ class ClaimRequest:
             proportionate deduction. Many policies exempt pharmacy and
             consumables; the value varies by wording, so it is an input rather
             than an assumption baked into the rule.
+        fund_value: Unit-linked fund value the withdrawal cap applies to.
         sum_insured: Overall ceiling.
         co_pay_percent: Percentage the insured bears.
         room_rent_cap_per_day: Eligible room rent per day.
@@ -124,6 +176,10 @@ class ClaimRequest:
         deductible: Fixed amount borne by the insured before the policy pays.
         waiting_period_months: Months that must elapse before this condition is
             covered.
+        depreciation_percent: Percentage deducted from a property item's value
+            for age, read from the policy's depreciation schedule.
+        withdrawal_cap_percent: Maximum withdrawable share of `fund_value` in a
+            policy year.
     """
 
     claimed_amount: float
@@ -132,6 +188,7 @@ class ClaimRequest:
     hospitalisation_days: int | None = None
     policy_age_months: int | None = None
     exempt_from_proportion: float = 0.0
+    fund_value: float | None = None
 
     sum_insured: PolicyTerm | None = None
     co_pay_percent: PolicyTerm | None = None
@@ -139,6 +196,8 @@ class ClaimRequest:
     sub_limit: PolicyTerm | None = None
     deductible: PolicyTerm | None = None
     waiting_period_months: PolicyTerm | None = None
+    depreciation_percent: PolicyTerm | None = None
+    withdrawal_cap_percent: PolicyTerm | None = None
 
     def __post_init__(self) -> None:
         """Validate the bill facts.
@@ -301,18 +360,18 @@ def settle(request: ClaimRequest) -> ClaimResult:
         term = request.waiting_period_months
         if request.policy_age_months is None:
             result.assumptions.append(
-                f"Policy age unknown, so the {term.value:.0f}-month waiting period "
-                f"[p.{term.source_page}] could not be checked."
+                f"Policy age unknown, so the {term.value:.0f}-month waiting period"
+                f"{term.citation} could not be checked."
             )
         elif request.policy_age_months < term.value:
             result.eligible = False
             result.rejection_reason = (
                 f"{term.label}: {term.value:.0f} months required, policy is "
-                f"{request.policy_age_months} months old [p.{term.source_page}]"
+                f"{request.policy_age_months} months old{term.citation}"
             )
             result.payable = 0.0
             result.complete = not result.assumptions
-            if term.source_page not in result.cited_pages:
+            if term.source_page is not None and term.source_page not in result.cited_pages:
                 result.cited_pages.append(term.source_page)
             return result
         else:
@@ -346,13 +405,68 @@ def settle(request: ClaimRequest) -> ClaimResult:
             None,
         )
 
+    # 2b. Depreciation — property claims only. A home policy pays what the item
+    #     is worth now, not what it cost new, and the schedule is banded by age
+    #     ("Up to 3 Years — 20%"). Applied straight after non-payables because,
+    #     like them, it establishes what was actually covered before any cap or
+    #     share is worked out. Silent on a health claim: no term, no step, and
+    #     deliberately no assumption line, because "no depreciation found" on a
+    #     hospital bill is noise rather than a caveat.
+    if request.depreciation_percent is not None:
+        term = request.depreciation_percent
+        balance = _record(
+            result,
+            "depreciation",
+            f"{term.label}: {term.value:.0f}% deducted for age",
+            balance,
+            balance * (1 - term.value / 100.0),
+            term.source_page,
+        )
+
+    # 2c. Unit-linked withdrawal cap — life products only. The ceiling is a share
+    #     of the FUND, not of the amount requested, so it needs `fund_value` as a
+    #     separate input; without it the rule cannot fire and says so.
+    if request.withdrawal_cap_percent is not None:
+        term = request.withdrawal_cap_percent
+        if request.fund_value is None:
+            result.assumptions.append(
+                f"Fund value unknown, so the {term.value:.0f}% withdrawal limit"
+                f"{term.citation} could not be applied."
+            )
+        else:
+            ceiling = request.fund_value * term.value / 100.0
+            if balance > ceiling:
+                balance = _record(
+                    result,
+                    "withdrawal_cap",
+                    (
+                        f"{term.label}: {term.value:.0f}% of the ₹{request.fund_value:,.0f} "
+                        f"fund value caps this withdrawal at ₹{ceiling:,.0f}"
+                    ),
+                    balance,
+                    ceiling,
+                    term.source_page,
+                )
+            else:
+                _record(
+                    result,
+                    "withdrawal_cap",
+                    (
+                        f"{term.label}: ₹{ceiling:,.0f} available this year, "
+                        f"₹{balance:,.0f} requested — within the limit"
+                    ),
+                    balance,
+                    balance,
+                    term.source_page,
+                )
+
     # 3. Room-rent proportionate deduction — the expensive surprise.
     if request.room_rent_cap_per_day is not None:
         cap = request.room_rent_cap_per_day
         if request.room_rent_per_day is None:
             result.assumptions.append(
-                f"Actual room rent unknown, so the ₹{cap.value:,.0f}/day limit "
-                f"[p.{cap.source_page}] could not be applied."
+                f"Actual room rent unknown, so the ₹{cap.value:,.0f}/day limit"
+                f"{cap.citation} could not be applied."
             )
         elif request.room_rent_per_day > cap.value > 0:
             ratio = cap.value / request.room_rent_per_day
@@ -591,6 +705,145 @@ def _self_test() -> list[tuple[str, bool, str]]:
         cases.append(("uncitable term rejected", False, "no exception raised"))
     except InvalidClaimInput:
         cases.append(("uncitable term rejected", True, "InvalidClaimInput raised"))
+
+    # Case 10 — a user-asserted term is usable but not citable. Page 0 is a bug
+    # (a document term that lost its page); None is a provenance. The two must
+    # not collapse into each other.
+    user_term = PolicyTerm(10.0, None, "Co-payment you told us about")
+    cases.append(("user term constructs", user_term.from_user, f"from_user={user_term.from_user}"))
+    cases.append(
+        (
+            "user term renders no page",
+            "p." not in user_term.citation,
+            f"citation={user_term.citation!r}",
+        )
+    )
+    doc_term = PolicyTerm(10.0, 39, "Co-payment")
+    cases.append(
+        ("document term renders its page", doc_term.citation == " [p.39]", doc_term.citation)
+    )
+
+    # Case 11 — the arithmetic does not care where a term came from, but
+    # `cited_pages` does. 240000 * 0.9 = 216000 either way; a user-asserted
+    # co-payment must contribute nothing to the citations.
+    result = settle(
+        ClaimRequest(claimed_amount=240_000, co_pay_percent=PolicyTerm(10.0, None, "Co-payment"))
+    )
+    check("user-asserted co-pay still computes", result.payable, 216_000)
+    cases.append(
+        (
+            "user-asserted co-pay cites nothing",
+            result.cited_pages == [],
+            f"cited_pages={result.cited_pages}",
+        )
+    )
+
+    # Case 12 — the same claim with a document term does cite, so the previous
+    # case is testing provenance rather than an empty code path.
+    result = settle(
+        ClaimRequest(claimed_amount=240_000, co_pay_percent=PolicyTerm(10.0, 39, "Co-payment"))
+    )
+    cases.append(
+        ("document co-pay cites its page", result.cited_pages == [39], f"cited_pages={result.cited_pages}")
+    )
+
+    # Case 13 — an ineligible claim driven by a user-asserted waiting period
+    # must not smuggle "p.None" into the rejection text.
+    result = settle(
+        ClaimRequest(
+            claimed_amount=240_000,
+            waiting_period_months=PolicyTerm(36.0, None, "Waiting period"),
+            policy_age_months=18,
+        )
+    )
+    cases.append(
+        (
+            "user-asserted rejection has no fake page",
+            not result.eligible
+            and "None" not in str(result.rejection_reason)
+            and result.cited_pages == [],
+            str(result.rejection_reason),
+        )
+    )
+
+    # Case 14 — property depreciation. 80000 - 20% = 64000. This is t-027.
+    result = settle(
+        ClaimRequest(
+            claimed_amount=80_000,
+            depreciation_percent=PolicyTerm(20.0, 5, "Depreciation up to 3 years"),
+        )
+    )
+    check("depreciation applied", result.payable, 64_000)
+    cases.append(
+        ("depreciation cites its page", result.cited_pages == [5], f"{result.cited_pages}")
+    )
+
+    # Case 15 — ULIP withdrawal cap. 20% of an 800000 fund = 160000, against a
+    # 200000 request. This is t-028.
+    result = settle(
+        ClaimRequest(
+            claimed_amount=200_000,
+            fund_value=800_000,
+            withdrawal_cap_percent=PolicyTerm(20.0, 3, "Partial withdrawal limit"),
+        )
+    )
+    check("withdrawal cap binds", result.payable, 160_000)
+
+    # Case 16 — a request already inside the cap is untouched, and the step is
+    # still recorded so the answer can say the limit was checked.
+    result = settle(
+        ClaimRequest(
+            claimed_amount=100_000,
+            fund_value=800_000,
+            withdrawal_cap_percent=PolicyTerm(20.0, 3, "Partial withdrawal limit"),
+        )
+    )
+    check("withdrawal within the cap is unchanged", result.payable, 100_000)
+    cases.append(
+        (
+            "the check is still recorded",
+            any(step.rule == "withdrawal_cap" for step in result.steps),
+            f"{[s.rule for s in result.steps]}",
+        )
+    )
+
+    # Case 17 — the cap is a share of the FUND, not of the request. Without a
+    # fund value the rule cannot fire and must say so rather than guess.
+    result = settle(
+        ClaimRequest(
+            claimed_amount=200_000,
+            withdrawal_cap_percent=PolicyTerm(20.0, 3, "Partial withdrawal limit"),
+        )
+    )
+    check("no fund value leaves the request alone", result.payable, 200_000)
+    cases.append(
+        (
+            "and records why",
+            any("Fund value unknown" in a for a in result.assumptions),
+            f"{result.assumptions}",
+        )
+    )
+
+    # Case 18 — a health claim must be untouched by both new rules: no steps,
+    # and no assumption noise about depreciation on a hospital bill.
+    result = settle(
+        ClaimRequest(claimed_amount=240_000, co_pay_percent=PolicyTerm(10.0, 39, "Co-payment"))
+    )
+    check("health claim unaffected", result.payable, 216_000)
+    cases.append(
+        (
+            "no property or ULIP steps on a health claim",
+            not any(s.rule in {"depreciation", "withdrawal_cap"} for s in result.steps),
+            f"{[s.rule for s in result.steps]}",
+        )
+    )
+    cases.append(
+        (
+            "and no depreciation assumption noise",
+            not any("epreciation" in a for a in result.assumptions),
+            f"{result.assumptions}",
+        )
+    )
 
     return cases
 

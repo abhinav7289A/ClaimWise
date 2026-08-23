@@ -26,12 +26,25 @@ every time you wanted the cheap one.
 * **Negatives** have no page to find, so we report mean top-1 similarity
   instead. A high score on an unanswerable question means refusal rests entirely
   on the model's judgment rather than being backed by weak retrieval.
+* **all-docs-covered@k** — for a multi-document question, did *every* required
+  document contribute a correct page? Added for Phase 3's comparison route. It
+  exists because hit@k cannot see this failure: a comparison question whose
+  answer needs Star page 31 *and* SBI page 20 scores a full hit the moment
+  either one arrives, so a pipeline that always finds one policy and never the
+  other reads as perfect. See `docs_covered_rate`.
+
+**Two eval sets, deliberately not interchangeable.** `--golden` (default) is the
+Phase 1 golden set: single-document lookups, human-verified. `--tasks` is Phase
+3's `agent_tasks.jsonl`: four routes, multi-document comparisons, verified at
+build time by machine (D-24). Their baselines and mixes differ, so a results
+file records which set it came from and `--baseline` refuses to cross the two.
 
 Usage:
     python -m evals.retrieval_metrics --help
     python -m evals.retrieval_metrics --allow-unverified
     python -m evals.retrieval_metrics
     python -m evals.retrieval_metrics --baseline evals/results/retrieval_xxx.json
+    python -m evals.retrieval_metrics --tasks --rerank --chunk-policy
 """
 
 from __future__ import annotations
@@ -88,6 +101,11 @@ class ItemResult:
         rerank_ms: Time spent in the cross-encoder, 0 when disabled. Reported
             separately because Phase 2's delta table pairs every quality gain
             with its latency cost.
+        min_documents: How many distinct documents a complete answer needs. 1
+            for every golden item; 2 for Phase 3's comparison tasks.
+        required_doc_ids: The distinct `doc_id`s appearing in
+            `ground_truth_refs`. Derivable, but stored so the per-item JSONL
+            can be read without recomputing it.
     """
 
     item_id: str
@@ -95,6 +113,8 @@ class ItemResult:
     policy_type: str
     ground_truth_pages: list[int]
     ground_truth_refs: list[str] = field(default_factory=list)
+    min_documents: int = 1
+    required_doc_ids: list[str] = field(default_factory=list)
     retrieved_pages: list[int] = field(default_factory=list)
     retrieved_refs: list[str] = field(default_factory=list)
     retrieved_chunk_ids: list[str] = field(default_factory=list)
@@ -147,6 +167,110 @@ def load_golden(path: Path, verified_only: bool) -> list[dict[str, Any]]:
     return verified
 
 
+# Which policy type each agent-task document key belongs to. The task set
+# identifies documents by short key rather than by policy type, because a
+# comparison task spans two of them and a single `policy_type` field would be a
+# lie. Reconstructed here only so the per-type breakdown stays comparable with
+# the golden set's.
+_DOC_KEY_POLICY_TYPE = {
+    "star": "health",
+    "sbih": "health",
+    "home": "home",
+    "life": "life",
+}
+
+
+def adapt_task(task: dict[str, Any]) -> dict[str, Any]:
+    """Reshape one `agent_tasks.jsonl` task into the golden-item shape.
+
+    An adapter rather than a second evaluation path. `evaluate_item` and
+    `compute_metrics` are the measured, trusted code; forking them for a second
+    eval set would mean two implementations of hit@k that could drift apart and
+    silently stop being comparable. Only the *input* shape differs, so only the
+    input shape is translated.
+
+    Three fields need real translation:
+
+    * `route` -> `question_type`. `out_of_scope` becomes `negative`, which is
+      what the metrics layer already calls a question with no page to find. The
+      other three routes pass through as their own labels.
+    * `ground_truth_refs` is passed through **precomputed**. Golden items carry
+      a single `ground_truth_doc_id` and `evaluate_item` builds the refs from
+      it; a comparison task spans two documents, so that construction cannot
+      express it and the build-time refs are used directly.
+    * `policy_type` is reconstructed from the evidence document keys, and a task
+      whose evidence spans two types is labelled `multi` rather than being
+      forced into one of them.
+
+    Args:
+        task: One parsed line of `agent_tasks.jsonl`.
+
+    Returns:
+        A dict `evaluate_item` can consume.
+    """
+    doc_keys = [entry.get("doc_key", "") for entry in task.get("evidence") or []]
+    types = sorted({_DOC_KEY_POLICY_TYPE.get(key, "") for key in doc_keys} - {""})
+    if not types:
+        policy_type = ""
+    elif len(types) == 1:
+        policy_type = types[0]
+    else:
+        policy_type = "multi"
+
+    route = task.get("route", "lookup")
+    return {
+        "id": task["id"],
+        "question": task["question"],
+        "question_type": "negative" if route == "out_of_scope" else route,
+        # The label, kept separately from `question_type` because the agent
+        # retrieval path branches on it. `question_type` folds out_of_scope into
+        # "negative" for the metrics layer; the router does not.
+        "route": route,
+        "expected_tools": task.get("expected_tools") or [],
+        "policy_type": policy_type,
+        "ground_truth_pages": task.get("ground_truth_pages") or [],
+        "ground_truth_refs": task.get("ground_truth_refs") or [],
+        "min_documents": int(task.get("min_documents") or 0) or 1,
+        # Agent tasks were never written from a single source chunk, so there is
+        # no exact-chunk ground truth. Left empty deliberately: chunk_rank stays
+        # None and exact-chunk hit@k reports 0.000 for this set, which is
+        # "not measured", not "measured and failed". Flagged in the report.
+        "source_chunk_id": "",
+    }
+
+
+def load_agent_tasks(path: Path) -> list[dict[str, Any]]:
+    """Read `agent_tasks.jsonl` and adapt it to the golden-item shape.
+
+    **On verification.** Every task carries `verified: false`, and that flag is
+    not consulted here. It means "no human has re-read the wording", which is a
+    different claim from the one these metrics depend on. What they depend on is
+    the ground-truth page being correct, and D-24's builder machine-checked every
+    citation against `data/processed/pages.jsonl` and every rupee figure against
+    the claims calculator, refusing to write the file on any disagreement. That
+    is a stronger guarantee for *this* purpose than a human tick, so a `--tasks`
+    run is not marked provisional. The distinction is recorded in the results
+    file under `verification` rather than left implicit.
+
+    Args:
+        path: Path to `agent_tasks.jsonl`.
+
+    Returns:
+        The adapted tasks, in file order.
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+    """
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"Agent task set not found: {path.resolve()}. "
+            "Run `python -m evals.build_agent_tasks --write` first."
+        )
+    with path.open("r", encoding="utf-8") as handle:
+        tasks = [json.loads(line) for line in handle if line.strip()]
+    return [adapt_task(task) for task in tasks]
+
+
 def first_rank(values: list[Any], targets: set[Any]) -> int | None:
     """Find the 1-based position of the first value present in `targets`.
 
@@ -172,6 +296,7 @@ def evaluate_item(
     reranker: CrossEncoderReranker | None = None,
     bm25: BM25Index | None = None,
     parents: ParentStore | None = None,
+    agent: Any = None,
 ) -> ItemResult:
     """Retrieve for one golden item and record where the correct page landed.
 
@@ -196,6 +321,26 @@ def evaluate_item(
         The item's retrieval outcome.
     """
     started = time.perf_counter()
+    if agent is not None:
+        # Agent path: the Phase 3 retrieval node decides the strategy from the
+        # route, so this measures per-document quotas and the relevance floor —
+        # the code the served pipeline actually runs. Every other branch below
+        # calls the Phase 2 pipeline directly and is blind to all of it, which is
+        # why the first `--tasks` run showed +0.000 for a change that was real.
+        from phase3_agents.retrieval_node import retrieve_node
+
+        update = retrieve_node(
+            {
+                "question": item["question"],
+                "user_id": settings["user_id"],
+                "route": item.get("route", "lookup"),
+            },
+            agent,
+        )
+        chunks = update["retrieved"]
+        latency_ms = (time.perf_counter() - started) * 1000.0
+        return _build_result(item, chunks, latency_ms, rerank_ms=0.0)
+
     if bm25 is not None:
         chunks = hybrid_retrieve(
             client,
@@ -245,7 +390,33 @@ def evaluate_item(
         chunks = parents.expand(chunks)
     candidates_after_expansion = len(chunks)
     latency_ms = (time.perf_counter() - started) * 1000.0
+    return _build_result(item, chunks, latency_ms, rerank_ms, candidates_after_expansion)
 
+
+def _build_result(
+    item: dict[str, Any],
+    chunks: list[Any],
+    latency_ms: float,
+    rerank_ms: float,
+    candidates_after_expansion: int = 0,
+) -> ItemResult:
+    """Score one item's retrieved chunks against its ground truth.
+
+    Split out of `evaluate_item` so the Phase 2 pipeline and the Phase 3 agent
+    path are scored by identical code. Two scorers would be two definitions of
+    hit@k, and the comparison between the paths would stop meaning anything the
+    moment one of them drifted.
+
+    Args:
+        item: The eval item.
+        chunks: Retrieved chunks, best first.
+        latency_ms: End-to-end retrieval time.
+        rerank_ms: Time in the cross-encoder, 0 when not separately measurable.
+        candidates_after_expansion: Candidates surviving parent expansion.
+
+    Returns:
+        The item's retrieval outcome.
+    """
     pages = [chunk.page for chunk in chunks]
     chunk_ids = [chunk.chunk_id for chunk in chunks]
     source_chunk_id = item.get("source_chunk_id", "")
@@ -254,13 +425,22 @@ def evaluate_item(
     # Page numbers repeat across documents — our two health policies span 47 and
     # 30 pages, so their ranges almost entirely overlap. Comparing page numbers
     # alone scores a chunk from the wrong insurer as a hit.
+    #
+    # Precomputed refs win when present. Golden items name one document and the
+    # refs are the cross-product of it with the pages; a comparison task pairs
+    # *specific* pages with *specific* documents (Star p.31 and SBI p.20), which
+    # a single doc id cannot express and a cross-product would corrupt — it
+    # would also accept Star p.20, a page that does not contain the answer.
     ground_truth_doc = item.get("ground_truth_doc_id", "")
-    ground_truth_refs = (
-        {f"{ground_truth_doc}:{page}" for page in ground_truth_pages}
-        if ground_truth_doc
-        else set()
-    )
+    precomputed_refs = item.get("ground_truth_refs") or []
+    if precomputed_refs:
+        ground_truth_refs = set(precomputed_refs)
+    elif ground_truth_doc:
+        ground_truth_refs = {f"{ground_truth_doc}:{page}" for page in ground_truth_pages}
+    else:
+        ground_truth_refs = set()
     retrieved_refs = [f"{chunk.doc_id}:{chunk.page}" for chunk in chunks]
+    required_doc_ids = sorted({ref.split(":", 1)[0] for ref in ground_truth_refs})
 
     return ItemResult(
         item_id=item["id"],
@@ -268,6 +448,8 @@ def evaluate_item(
         policy_type=item.get("policy_type", ""),
         ground_truth_pages=sorted(ground_truth_pages),
         ground_truth_refs=sorted(ground_truth_refs),
+        min_documents=int(item.get("min_documents") or 1),
+        required_doc_ids=required_doc_ids,
         retrieved_pages=pages,
         retrieved_refs=retrieved_refs,
         retrieved_chunk_ids=chunk_ids,
@@ -350,6 +532,55 @@ def page_recall(results: list[ItemResult], k: int) -> float:
     return round(statistics.fmean(recalls), 4) if recalls else 0.0
 
 
+def covered_documents(result: ItemResult, k: int) -> tuple[set[str], set[str]]:
+    """Split an item's required documents into required and actually reached.
+
+    Args:
+        result: One item's retrieval outcome.
+        k: Cutoff.
+
+    Returns:
+        `(required_doc_ids, reached_doc_ids)`. A document counts as reached only
+        when one of its own ground-truth refs is in the top k — some other page
+        of the right document is not evidence.
+    """
+    ground_truth = set(result.ground_truth_refs)
+    required = {ref.split(":", 1)[0] for ref in ground_truth}
+    reached = {ref.split(":", 1)[0] for ref in set(result.retrieved_refs[:k]) & ground_truth}
+    return required, reached
+
+
+def docs_covered_rate(results: list[ItemResult], k: int) -> float:
+    """Fraction of items where EVERY required document contributed a correct page.
+
+    The metric hit@k cannot express. For a comparison question needing Star
+    p.31 and SBI p.20, hit@k scores 1.0 the moment either arrives; this scores
+    1.0 only when both do. On single-document items the two are identical by
+    construction, which is what makes it safe to report over the whole set.
+
+    Strictness is deliberate: a required document counts as covered only when
+    one of *its own* ground-truth refs is in the top k. Merely retrieving some
+    other page of that document is not coverage — the comparison agent would
+    still have nothing to compare.
+
+    Args:
+        results: Positive-item results.
+        k: Cutoff.
+
+    Returns:
+        A value between 0.0 and 1.0, or 0.0 for an empty input.
+    """
+    scored = [result for result in results if result.ground_truth_refs]
+    if not scored:
+        return 0.0
+    covered = 0
+    for result in scored:
+        required, reached = covered_documents(result, k)
+        if required <= reached:
+            covered += 1
+    return round(covered / len(scored), 4)
+
+
 def compute_metrics(results: list[ItemResult], k_values: list[int]) -> dict[str, Any]:
     """Aggregate per-item results into the reported metric set.
 
@@ -375,6 +606,45 @@ def compute_metrics(results: list[ItemResult], k_values: list[int]) -> dict[str,
             "mrr": mean_reciprocal_rank(group, max_k),
         }
 
+    # Grouped by question type as well as policy type. On the golden set this
+    # separates lookups from calculations; on the agent task set it is the
+    # per-route retrievability breakdown, which is the whole point of the run.
+    by_question_type: dict[str, dict[str, Any]] = {}
+    grouped_by_type: dict[str, list[ItemResult]] = defaultdict(list)
+    for result in positives:
+        grouped_by_type[result.question_type or "unknown"].append(result)
+    for question_type, group in sorted(grouped_by_type.items()):
+        by_question_type[question_type] = {
+            "items": len(group),
+            "hit_at_5_page": hit_rate(group, 5),
+            "docs_covered_at_5": docs_covered_rate(group, 5),
+            "mrr": mean_reciprocal_rank(group, max_k),
+            "missed_item_ids": [r.item_id for r in group if r.page_rank is None],
+        }
+
+    # The multi-document subset, reported separately because it is the only
+    # place hit@k and coverage can disagree — averaged into a mostly
+    # single-document set, a comparison failure disappears.
+    multi_doc = [r for r in positives if r.min_documents > 1]
+    multi_doc_summary = (
+        {
+            "items": len(multi_doc),
+            "item_ids": [r.item_id for r in multi_doc],
+            "hit_at_k_page": {str(k): hit_rate(multi_doc, k, "page") for k in k_values},
+            "docs_covered_at_k": {str(k): docs_covered_rate(multi_doc, k) for k in k_values},
+            # Items that hit@5 counts as successes but that reach only one of
+            # the two policies. These are the population the comparison agent
+            # would silently half-answer, so they are named, not just counted.
+            "partially_covered_at_5": [
+                r.item_id
+                for r in multi_doc
+                if (covered := covered_documents(r, 5))[1] and not covered[0] <= covered[1]
+            ],
+        }
+        if multi_doc
+        else None
+    )
+
     latencies = [r.latency_ms for r in results] or [0.0]
     latencies_sorted = sorted(latencies)
     p95_index = min(len(latencies_sorted) - 1, int(round(0.95 * (len(latencies_sorted) - 1))))
@@ -387,8 +657,11 @@ def compute_metrics(results: list[ItemResult], k_values: list[int]) -> dict[str,
         "hit_at_k_page": {str(k): hit_rate(positives, k, "page") for k in k_values},
         "hit_at_k_chunk": {str(k): hit_rate(positives, k, "chunk") for k in k_values},
         "hit_at_k_loose": {str(k): hit_rate(positives, k, "loose") for k in k_values},
+        "docs_covered_at_k": {str(k): docs_covered_rate(positives, k) for k in k_values},
         "mrr": mean_reciprocal_rank(positives, max_k),
         "page_recall_at_5": page_recall(positives, 5),
+        "by_question_type": by_question_type,
+        "multi_document": multi_doc_summary,
         "latency_ms": {
             "median": round(statistics.median(latencies), 2),
             "p95": round(latencies_sorted[p95_index], 2),
@@ -422,11 +695,19 @@ def print_report(summary: dict[str, Any], k_values: list[int], baseline: dict[st
     ):
         row = "".join(f"{summary[key][str(k)]:>9.3f}" for k in k_values)
         print(f"{label}{row}")
+    if "docs_covered_at_k" in summary:
+        row = "".join(f"{summary['docs_covered_at_k'][str(k)]:>9.3f}" for k in k_values)
+        print(f"all docs cov.{row}")
     inflation = summary["hit_at_k_loose"]["5"] - summary["hit_at_k_page"]["5"]
     print(
         f"  * page-number match ignoring document — over-reports by "
         f"{inflation:+.3f} at @5. Not a real metric; shown to keep it honest."
     )
+    if summary.get("eval_set_kind") == "agent_tasks":
+        print(
+            "  ! exact chunk is NOT MEASURED on the agent task set — those tasks were "
+            "authored, not written from a source chunk. Read 0.000 as absent, not failed."
+        )
 
     print(f"\nMRR                 : {summary['mrr']:.4f}")
     print(f"page recall@5       : {summary['page_recall_at_5']:.4f}")
@@ -439,6 +720,45 @@ def print_report(summary: dict[str, Any], k_values: list[int], baseline: dict[st
                 f"  {policy_type:<8}: {stats['hit_at_5_page']:.3f} / "
                 f"{stats['mrr']:.3f}  ({stats['items']} items)"
             )
+
+    if summary.get("by_question_type"):
+        print("\nby question type (page hit@5 / all-docs-covered@5 / MRR):")
+        for question_type, stats in summary["by_question_type"].items():
+            print(
+                f"  {question_type:<12}: {stats['hit_at_5_page']:.3f} / "
+                f"{stats['docs_covered_at_5']:.3f} / {stats['mrr']:.3f}  "
+                f"({stats['items']} items)"
+            )
+            if stats["missed_item_ids"]:
+                print(f"    missed: {', '.join(stats['missed_item_ids'])}")
+
+    multi = summary.get("multi_document")
+    if multi:
+        print(f"\n=== MULTI-DOCUMENT SUBSET ({multi['items']} items) ===")
+        print("The question this run exists to answer: can one retrieval serve both policies?")
+        print("               " + "".join(f"{'@' + str(k):>9}" for k in k_values))
+        for label, key in (
+            ("any ref hit  ", "hit_at_k_page"),
+            ("ALL docs cov.", "docs_covered_at_k"),
+        ):
+            row = "".join(f"{multi[key][str(k)]:>9.3f}" for k in k_values)
+            print(f"{label}{row}")
+        gap = multi["hit_at_k_page"]["5"] - multi["docs_covered_at_k"]["5"]
+        print(
+            f"  gap at @5: {gap:+.3f} — items that look like hits but hand the agent "
+            "only one side of the comparison."
+        )
+        if multi["partially_covered_at_5"]:
+            print(
+                f"  half-answered ({len(multi['partially_covered_at_5'])}): "
+                f"{', '.join(multi['partially_covered_at_5'])}"
+            )
+            print(
+                "  => a global top-5 cannot serve these. The retrieval node needs "
+                "per-document top-k on the comparison route."
+            )
+        else:
+            print("  => a global top-5 covers every comparison task. One retrieval call suffices.")
 
     if summary["negatives_mean_top_score"] is not None:
         print(
@@ -479,6 +799,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH)
     parser.add_argument("--golden", type=Path, default=None, help="Golden set JSONL.")
+    parser.add_argument(
+        "--tasks",
+        action="store_true",
+        help=(
+            "Evaluate Phase 3's agent_tasks.jsonl instead of the golden set. Adds the "
+            "all-docs-covered metric for multi-document comparison tasks. Results are "
+            "NOT comparable with a golden-set run."
+        ),
+    )
     parser.add_argument("--embed-model", default=None, help="Override embed.model_name.")
     parser.add_argument("--top-k", type=int, default=None, help="Override eval.retrieval_top_k.")
     parser.add_argument(
@@ -520,6 +849,16 @@ def build_parser() -> argparse.ArgumentParser:
             "Density-selected per-document chunking (Phase 2 technique 5). Implies parent "
             "expansion: dense documents produce children, sparse ones flat chunks that pass "
             "through untouched."
+        ),
+    )
+    parser.add_argument(
+        "--agent-retrieval",
+        action="store_true",
+        help=(
+            "Retrieve through phase3_agents.retrieval_node instead of calling the Phase 2 "
+            "pipeline directly. This is the ONLY way to measure per-document quotas and "
+            "the relevance floor — every other flag here is blind to them. Requires "
+            "--tasks, since the route label lives in the task set."
         ),
     )
     parser.add_argument(
@@ -605,6 +944,137 @@ def resolve_settings(config: dict[str, Any], args: argparse.Namespace) -> dict[s
     }
 
 
+def _write_results(
+    summary: dict[str, Any],
+    results: list[ItemResult],
+    results_dir: Path,
+    stem: str,
+    tag: str,
+    baseline: dict[str, Any] | None,
+    k_values: list[int],
+) -> None:
+    """Print the report and write both results files.
+
+    Args:
+        summary: Metrics from this run.
+        results: Per-item outcomes.
+        results_dir: Where to write.
+        stem: Filename stem, encoding which eval set and path produced this.
+        tag: Optional label from the CLI.
+        baseline: A previous run's summary, or None.
+        k_values: Cutoffs reported.
+    """
+    print_report(summary, k_values, baseline)
+
+    results_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    suffix = f"_{tag}" if tag else ""
+    prefix = "provisional_" if summary.get("provisional") else ""
+
+    results_path = results_dir / f"{prefix}{stem}_{stamp}{suffix}.json"
+    results_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    per_item_path = results_dir / f"{prefix}{stem}_{stamp}{suffix}_items.jsonl"
+    with per_item_path.open("w", encoding="utf-8") as handle:
+        for result in results:
+            handle.write(json.dumps(result.__dict__, ensure_ascii=False) + "\n")
+
+    print(f"\nresults : {results_path}")
+    print(f"per-item: {per_item_path}")
+    print("\nPass --baseline <that results file> on the next run to see deltas.")
+
+
+def _run_agent_retrieval(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+    settings: dict[str, Any],
+    items: list[dict[str, Any]],
+    tasks_path: Path,
+    results_dir: Path,
+) -> int:
+    """Score the task set through the Phase 3 retrieval node.
+
+    **Which route is used, and why it matters.** This scores against the task
+    set's *labelled* route, not the router's prediction. That isolates the
+    retrieval change: mixing in a router at 0.82 accuracy would fold two error
+    sources into one number, and a coverage drop could be either the quotas
+    failing or the router sending a comparison down the global path. The
+    end-to-end number, router included, is the agent eval harness's job.
+
+    Args:
+        args: Parsed command-line arguments.
+        config: Parsed `config.yaml`.
+        settings: Resolved evaluation settings.
+        items: Adapted task items.
+        tasks_path: Where the tasks were read from.
+        results_dir: Where to write results.
+
+    Returns:
+        Process exit code.
+    """
+    from phase3_agents.retrieval_node import build_resources
+
+    resources = build_resources(config)
+    LOGGER.info(
+        "AGENT RETRIEVAL: pipeline=%s collection=%s. Comparison tasks take the "
+        "per-document path; everything else takes the global path.",
+        resources.settings["pipeline"],
+        resources.collection_name,
+    )
+    # The node owns the user boundary at serving time, so the eval must use the
+    # same one or every filtered search would return nothing.
+    settings = {**settings, "user_id": resources.settings["default_user_id"]}
+
+    try:
+        results = [
+            evaluate_item(item, None, "", None, settings, agent=resources)  # type: ignore[arg-type]
+            for item in tqdm(items, desc="Agent retrieval", unit="q")
+        ]
+    finally:
+        resources.close()
+
+    summary = compute_metrics(results, settings["k_values"])
+    summary.update(
+        {
+            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            "tag": args.tag,
+            "provisional": False,
+            "eval_set_kind": "agent_tasks",
+            "verification": "build-time machine verification (D-24)",
+            "retrieval_path": "phase3_agents.retrieval_node",
+            "route_source": "gold labels (not the router)",
+            "pipeline": resources.settings["pipeline"],
+            "collection": resources.collection_name,
+            "per_doc_depth": resources.settings["per_doc_depth"],
+            "per_doc_top_k": resources.settings["per_doc_top_k"],
+            "comparison_top_k": resources.settings["comparison_top_k"],
+            "document_relevance_floor": resources.settings["document_relevance_floor"],
+            "max_documents": resources.settings["max_documents"],
+            "embed_model": resources.settings["embed_model"],
+            "exact_chunk_comparable": False,
+            "golden_set": tasks_path.as_posix(),
+        }
+    )
+
+    baseline = None
+    if args.baseline and args.baseline.is_file():
+        baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+        if baseline.get("eval_set_kind", "golden") != "agent_tasks":
+            LOGGER.error("Baseline is not an agent_tasks run — delta suppressed.")
+            baseline = None
+
+    _write_results(
+        summary,
+        results,
+        results_dir,
+        stem="retrievalagent",
+        tag=args.tag,
+        baseline=baseline,
+        k_values=settings["k_values"],
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Evaluate retrieval over the golden set.
 
@@ -623,18 +1093,44 @@ def main(argv: list[str] | None = None) -> int:
     config = load_config(args.config)
     settings = resolve_settings(config, args)
 
-    eval_dir = Path(cfg_get(config, "paths.eval_dir", "data/eval"))
-    golden_path = args.golden or eval_dir / cfg_get(config, "eval.output_filename", "golden.jsonl")
-    results_dir = Path(cfg_get(config, "eval.results_dir", "evals/results"))
+    if args.agent_retrieval and not args.tasks:
+        LOGGER.error(
+            "--agent-retrieval needs --tasks. The node branches on the route label, "
+            "and golden.jsonl carries no route."
+        )
+        return 1
 
-    items = load_golden(golden_path, verified_only=not args.allow_unverified)
+    eval_dir = Path(cfg_get(config, "paths.eval_dir", "data/eval"))
+    results_dir = Path(cfg_get(config, "eval.results_dir", "evals/results"))
+    eval_set_kind = "agent_tasks" if args.tasks else "golden"
+
+    if args.tasks:
+        golden_path = args.golden or eval_dir / cfg_get(
+            config, "eval.agent_tasks_filename", "agent_tasks.jsonl"
+        )
+        items = load_agent_tasks(golden_path)
+        LOGGER.info(
+            "Agent task set: %d tasks from %s. Ground truth machine-verified at build "
+            "time (D-24), so this run is not marked provisional.",
+            len(items),
+            golden_path,
+        )
+        LOGGER.warning(
+            "Agent-set numbers are NOT comparable with golden-set numbers — different "
+            "questions, different route mix, and 12 tasks need two documents at once."
+        )
+    else:
+        golden_path = args.golden or eval_dir / cfg_get(
+            config, "eval.output_filename", "golden.jsonl"
+        )
+        items = load_golden(golden_path, verified_only=not args.allow_unverified)
     if not items:
         LOGGER.error(
             "No items to evaluate. Verify items in %s, or pass --allow-unverified.",
             golden_path,
         )
         return 1
-    if args.allow_unverified:
+    if args.allow_unverified and not args.tasks:
         LOGGER.warning(
             "PROVISIONAL RUN — including unverified items. These numbers must not "
             "be recorded in METRICS.md as the Phase 1 baseline."
@@ -654,6 +1150,9 @@ def main(argv: list[str] | None = None) -> int:
             golden_path,
         )
         return 1
+
+    if args.agent_retrieval:
+        return _run_agent_retrieval(args, config, settings, items, golden_path, results_dir)
 
     embedder = SentenceTransformer(settings["embed_model"], device=settings["device"])
     collection_name = collection_name_for(
@@ -710,7 +1209,17 @@ def main(argv: list[str] | None = None) -> int:
         {
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "tag": args.tag,
-            "provisional": bool(args.allow_unverified),
+            "provisional": bool(args.allow_unverified) and not args.tasks,
+            # Which eval set produced this file. Recorded so --baseline can
+            # refuse to cross the two: their question mixes differ enough that a
+            # delta between them would be meaningless and look meaningful.
+            "eval_set_kind": eval_set_kind,
+            "verification": (
+                "build-time machine verification (D-24): citations checked against "
+                "pages.jsonl, rupee figures against claims_calculator"
+                if args.tasks
+                else ("human-verified" if not args.allow_unverified else "unverified")
+            ),
             "parent_docs": settings["parent_docs"],
             "chunk_policy": settings["chunk_policy"],
             "candidates_after_expansion_median": (
@@ -748,28 +1257,34 @@ def main(argv: list[str] | None = None) -> int:
     if args.baseline:
         if args.baseline.is_file():
             baseline = json.loads(args.baseline.read_text(encoding="utf-8"))
+            # Older results files predate this field; they are all golden-set
+            # runs, so absence means "golden" rather than "unknown".
+            baseline_kind = baseline.get("eval_set_kind", "golden")
+            if baseline_kind != eval_set_kind:
+                LOGGER.error(
+                    "Baseline is a '%s' run and this is a '%s' run — the two sets ask "
+                    "different questions, so the delta would be noise dressed as a "
+                    "result. Delta suppressed.",
+                    baseline_kind,
+                    eval_set_kind,
+                )
+                baseline = None
         else:
             LOGGER.warning("Baseline file not found: %s", args.baseline)
 
-    print_report(summary, settings["k_values"], baseline)
-
-    results_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    suffix = f"_{args.tag}" if args.tag else ""
-    # Provisional runs are marked in the filename, not just inside the JSON, so
-    # a file tagged "baseline" can never quietly contain unverified numbers.
-    prefix = "provisional_" if args.allow_unverified else ""
-    results_path = results_dir / f"{prefix}retrieval_{stamp}{suffix}.json"
-    results_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-
-    per_item_path = results_dir / f"{prefix}retrieval_{stamp}{suffix}_items.jsonl"
-    with per_item_path.open("w", encoding="utf-8") as handle:
-        for result in results:
-            handle.write(json.dumps(result.__dict__, ensure_ascii=False) + "\n")
-
-    print(f"\nresults : {results_path}")
-    print(f"per-item: {per_item_path}")
-    print("\nPass --baseline <that results file> on the next run to see deltas.")
+    # Provisional runs are marked in the filename, not just inside the JSON, so a
+    # file tagged "baseline" can never quietly contain unverified numbers. Agent-
+    # set runs get their own stem so a glob over `retrieval_*` for a Phase 2
+    # comparison can never pick one up by accident.
+    _write_results(
+        summary,
+        results,
+        results_dir,
+        stem="retrievaltasks" if args.tasks else "retrieval",
+        tag=args.tag,
+        baseline=baseline,
+        k_values=settings["k_values"],
+    )
     return 0
 
 

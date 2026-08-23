@@ -58,6 +58,14 @@ dependencies = [
     # sparse vectors in embedded local mode, and over Elasticsearch because
     # running a JVM service for 653 documents is absurd.
     "rank-bm25>=0.2.2",
+    # langgraph: Phase 3's agent graph. Arrives here and not earlier because
+    # nothing before it branched — Phases 1 and 2 were a straight line, and
+    # every Phase 3 node was built and tested without it. Chosen over
+    # LangChain's AgentExecutor because routing here is a measured deterministic
+    # classifier (D-25), not a decision to hand back to an LLM at every step;
+    # chosen over a hand-rolled dispatch because Phase 5 needs streamed
+    # intermediate node state, which is built in here and fiddly by hand.
+    "langgraph>=0.2",
 ]
 
 [tool.uv]

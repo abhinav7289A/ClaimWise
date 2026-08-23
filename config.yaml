@@ -126,6 +126,11 @@ eval:
 
   output_filename: golden.jsonl
   review_filename: review.md
+  # Phase 3's 50-task agent set (D-24). A separate file, not extra rows in
+  # golden.jsonl, because the two have different verification stories and
+  # different route mixes — the golden set is 84% lookup, this one is 28%.
+  # Mixing them would make every majority-class baseline uninterpretable.
+  agent_tasks_filename: agent_tasks.jsonl
 
   # Retrieve this many chunks once, then slice for each k below. Retrieving 10
   # costs the same as retrieving 5 and lets us see how far down a correct page
@@ -232,6 +237,104 @@ router:
   # and let the escalation node decide what to do about it.
   ambiguity_margin: 0.05
 
+retrieval_agent:
+  # Phase 3, task 2. Phase 2's pipeline wrapped as a graph node.
+  #
+  # Which chunking pipeline the node retrieves from. The two eval sets DISAGREE
+  # and that disagreement is unresolved:
+  #   golden.jsonl (92 items)      chunk_policy 0.871  >  parent_docs 0.788
+  #   agent_tasks.jsonl (50 tasks) chunk_policy 0.625  <  parent_docs 0.650
+  # `chunk_policy` is kept as the default because D-19 adopted it and nothing
+  # has formally superseded that. Suspicion worth testing before switching: the
+  # golden questions were GENERATED FROM the Phase 1 1,000-char chunks, so that
+  # set may favour retrieval resembling the chunking that produced it.
+  pipeline: chunk_policy
+
+  # --- Comparison route only ------------------------------------------------
+  # Measured 2026-08-20 on 12 comparison tasks: one global top-5 covered every
+  # required document in 0.250 of them, and 0.417 even at depth 20 — the whole
+  # candidate pool. The second policy's page was never fetched, so the fix is
+  # one search per document rather than a deeper cut.
+
+  # Candidates fetched from EACH document before reranking within it.
+  per_doc_depth: 10
+  # Slots reserved for each document in the merged result. A floor, not a cap —
+  # spare slots still go to the best passages wherever they came from.
+  per_doc_top_k: 2
+  # Total chunks handed to the generator on a comparison. Larger than rag.top_k
+  # because two policies' worth of evidence genuinely needs more room.
+  comparison_top_k: 6
+  # Latency guard: each document costs one search plus one cross-encoder pass.
+  max_documents: 4
+
+  # Drop a document from a comparison when its best passage scores below this
+  # FRACTION of the best document's best passage.
+  #
+  # Measured 2026-08-20, live run: "Which of my two health policies makes me wait
+  # less for pre-existing conditions?" fanned out to all four documents, so a
+  # life policy and a home policy each took a slot out of six. SBI Alpha was left
+  # with two, and its correct page (20, "24 months") sits below that — the
+  # comparison then reported SBI's waiting period as unstated.
+  #
+  # A quota is only useful among documents that could plausibly answer. Relative
+  # rather than absolute because cross-encoder scores shift with question
+  # phrasing; the ratio between documents on the SAME question is the stable
+  # signal. The best-scoring document is always kept, so this can never empty
+  # the comparison.
+  document_relevance_floor: 0.15
+
+confidence_gate:
+  # Phase 3, task 5. Refuse BEFORE calling the generator when retrieval's own
+  # rank-1 cross-encoder score says no passage supports an answer.
+  #
+  # The defect it targets is measured twice (METRICS §1.7, §2.5): when retrieval
+  # fails, the generator answers anyway — 20 of 26 in Phase 1, 10 of 11 after
+  # reranking shrank the population without touching the rate. The system prompt
+  # already asks for a refusal and gets one 23% of the time; a request is not a
+  # control, a deterministic branch is.
+  #
+  # Gates on the CROSS-ENCODER score, never the bi-encoder's. P-14 measured both
+  # on the 15 unanswerable questions: cosine 0.6687 (inside the range genuine
+  # questions occupy — no cut point exists) vs cross-encoder 0.0985. The gate
+  # therefore runs after reranking.
+  enabled: true
+
+  # MEASURED 2026-08-17 (D-23), sweep over run `mx-rr20-clean` joined to
+  # generation run `mx-rr20-gen`. **P-14's recommended 0.20-0.25 was ~10x too
+  # high** — it was derived from the negatives alone and never priced what the
+  # same cut does to genuine hits. At 0.20 the gate falsely refuses 9 of 67
+  # answerable questions to gain one extra catch. The usable band is far lower
+  # than the original grid could even see:
+  #
+  #   negatives cluster below 0.04 (median 0.017)
+  #   lowest-scoring GENUINE hit is g-067 at 0.0414  <- the ceiling
+  #
+  # At 0.02, combined with the generator's own refusals: negatives 14/15 -> 15/15,
+  # ZERO new false refusals, 9 generator calls skipped.
+  #
+  # 0.02 rather than 0.04 deliberately. 0.04 saves 4 more calls and catches one
+  # more ungrounded item, but sits 0.0014 from g-067 — tuning into a gap that
+  # narrow, defined by a single item, is fitting the eval set. 0.02 keeps a ~2x
+  # margin to the lowest genuine hit and gives up almost nothing. Re-sweep after
+  # any retrieval change; this number is a property of the cross-encoder's score
+  # distribution, not a constant:
+  #   python -m phase3_agents.confidence_gate --sweep --fine-grid
+  refuse_below: 0.02
+
+  # Above this the evidence is strong; between the two an answer is generated
+  # but flagged for a human. The middle band is the human-escalation half of
+  # CLAUDE.md Phase 3 task 5, and in Phase 5 it is what the monitoring dashboard
+  # filters on. Unmeasurable against the golden set — it changes no answer's
+  # correctness, only whether a human sees it — so this is a product judgement,
+  # recorded as such rather than dressed up as a tuned number.
+  #
+  # What IS measured is the workload it implies: 15 of 67 answerable questions
+  # (22%) score below 0.50, so this flags roughly a fifth of successful answers
+  # for review. Sustainable for a demo; tighten it if the Phase 5 dashboard
+  # shows the queue being ignored, which is how an over-generous escalation
+  # threshold fails in production.
+  escalate_below: 0.50
+
 chunk_policy:
   # Phase 2, technique 5. Chunk each document by its MEASURED page density
   # rather than applying one global size to the corpus.
@@ -270,18 +373,30 @@ generator:
   # NIM, OpenRouter and HF all speak the OpenAI protocol, so switching provider
   # is a base_url and a key — not a new code path.
   #
-  # nim    — current default as of 2026-08-15. Free tier, ~40 req/min.
-  #          Timed out from this machine on 2026-08-11 (P-13, unresolved) — run
-  #          `python -m common.generator` to confirm reachability before
-  #          committing to a long eval run.
+  # nim    — default 2026-08-15 to 2026-08-21. Free tier, ~40 req/min.
+  #          **UNREACHABLE from this machine.** P-13 was opened on 2026-08-11 and
+  #          never resolved; on 2026-08-21 `python -m common.generator` failed
+  #          5/5 attempts with "Request timed out" and took ~331s to say so.
+  #          The same ladder killed agent-eval tasks t-019 and t-026 on
+  #          2026-08-20, burning 336s each and scoring them as agent failures.
+  #          Do not point an eval at this until a bare connectivity check passes.
   # hf     — HF Pro Inference Providers. **Balance exhausted 2026-08-15**, which
   #          is what forced this switch. Produced the Phase 1 baseline, so a
   #          like-for-like comparison against those numbers is no longer
   #          possible; see the note in METRICS.md before comparing across it.
-  # openrouter — verified working; $5 of credits. Fallback. Note the configured
-  #          Qwen model is a *reasoning* model: it billed 168 output tokens to
-  #          answer "OK", so swap in a non-thinking model for bulk eval work.
-  provider: nim
+  # openrouter — **current default as of 2026-08-21**, because NIM is
+  #          unreachable and Phase 3 cannot be measured without a generator.
+  #          PAID, and the only paid path in the project. Now on
+  #          deepseek-v4-flash, which is not a reasoning model — the earlier
+  #          warning here was about a Qwen config that billed 168 output tokens
+  #          to answer "OK". Bulk eval on this model is ~$0.008 per 52 calls.
+  #
+  #          **This switch invalidates cross-generator comparisons.** The
+  #          2026-08-20 agent-eval numbers were produced on NIM; anything
+  #          measured from here is not comparable to them unless BOTH systems
+  #          are re-run together. Phase 2's judged metrics were already lost to
+  #          exactly this mistake — see METRICS.md.
+  provider: openrouter
 
   # Temperature 0: evaluation must be reproducible. A judged metric that moves
   # because of sampling noise cannot be attributed to a pipeline change.

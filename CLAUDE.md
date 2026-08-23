@@ -21,6 +21,15 @@ Learning-first, production-style build: RAG → Advanced RAG → Agentic AI → 
 - WAIT for my pasted results before writing the next file. Never write ahead of my execution.
 - If my pasted output shows an error, debug by reasoning over the log first; only then edit code.
 
+> **Amendment history — read this before proposing a change to §1.**
+> On 2026-08-17 I lifted this rule verbally without editing the file, which left
+> the constitution contradicting practice and caused exactly the drift you would
+> expect. On 2026-08-18 it was briefly rewritten to split on "who pays" (Claude
+> ran free deterministic local work; I ran anything that spent money or GPU
+> time), and on the same day I **reverted it in full** to the text above.
+> Write-only is the standing rule. If it is ever lifted again, the lift is not in
+> force until this section is edited — a verbal change alone does not count.
+
 ## 2. TEACHING MODE (WHY THIS PROJECT EXISTS)
 
 This project must teach me production-level AI engineering, not just produce working code.

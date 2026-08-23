@@ -210,6 +210,202 @@ subset — so the hybrid "cheap pre-filter with LLM fallback" design is dead too
 Measured on 2 of 4 routes; `calculation` and `comparison` have no labels until
 the 50-task set exists.
 
+### Phase 3 — the 50-task agent eval set, 2026-08-18
+
+`python -m evals.build_agent_tasks --write` → `data/eval/agent_tasks.jsonl`.
+Authored, not generated (D-24). Every citation machine-verified against
+`data/processed/pages.jsonl`; every rupee figure hand-computed and verified
+against `phase3_agents.claims_calculator`. Build fails on any disagreement.
+
+| | Count |
+|---|---:|
+| Total | **50** |
+| lookup / calculation / comparison / out_of_scope | 14 / 14 / 12 / 10 |
+| **Majority-class baseline** | **0.28** |
+| Calculation tasks the calculator can settle today | 12 of 14 |
+| Tasks needing tooling that does not exist | 2 (`t-027` depreciation, `t-028` ULIP withdrawal) |
+| Tasks whose correct answer is "provisional, term not in the wording" | 2 (`t-025`, `t-039`) |
+| Evidence spans star / sbih / home / life | 24 / 19 / 7 / 3 |
+
+The mix is deliberately **not** natural traffic: `lookup` is under-weighted
+because 92 lookup items already exist in `golden.jsonl`, and the two routes with
+no labels anywhere are over-weighted. **The 0.28 baseline here and the 0.837
+baseline on the golden set are not comparable.**
+
+### Phase 3 — router re-measured on all 4 routes (D-24), 2026-08-18
+
+`python -m phase3_agents.router --eval --tasks`. Same router, same code path,
+different set — the one D-22 said it could not be measured on.
+
+| Set | Items | Accuracy | Majority baseline | Margin |
+|---|---:|---|---|---|
+| `golden.jsonl` (2 routes) | 92 | 0.3587 | 0.8370 | **−47.8** |
+| **`agent_tasks.jsonl` (4 routes)** | 50 | **0.7800** | **0.2800** | **+50.0** |
+
+Per-route recall, which is the part that matters:
+
+| Route | Recall |
+|---|---|
+| comparison | 11/12 = **0.917** |
+| out_of_scope | 9/10 = **0.900** |
+| calculation | 12/14 = **0.857** |
+| **lookup** | 7/14 = **0.500** |
+
+**Cost-weighted, only 3 of 50 misroutes are harmful** — `t-019`/`t-020`
+(calculation → comparison, so the calculator never runs and an LLM does the
+arithmetic) and `t-050` (out_of_scope → calculation). The other 8 are
+lookup → calculation/comparison, which cost an unnecessary stage but leave the
+answer reachable, because the routes are additive.
+
+**D-22's rejection was an artifact of the eval set, not a property of the
+router.** The golden set is 84% lookup, so "always lookup" is nearly unbeatable
+there and the router's one weak class is exactly the class that dominates it.
+**Read with the authorship caveat in D-24: the same person wrote these 50 tasks
+and holds the exemplars, so 0.78 is an upper bound.**
+
+### Phase 3 — router exemplars revised (D-25), 2026-08-18
+
+`python -m phase3_agents.router --eval --tasks` and `--eval`. Exemplars only —
+no code change to the routing mechanism. 32 → 54 exemplars
+(lookup 10→22, calculation 8→10, comparison 6→10, out_of_scope 8→12).
+
+| | agent_tasks (50) | golden (92) |
+|---|---|---|
+| Majority baseline | 0.28 | 0.837 |
+| Accuracy before | 0.7800 | 0.3587 |
+| **Accuracy after** | **0.8200** | **0.6522** |
+| Δ | **+4.0** | **+29.3** |
+
+Per-route recall — `orig` → `v1` → **`v2`**:
+
+| Route | agent_tasks | golden |
+|---|---|---|
+| **lookup** (the target) | 0.500 → 0.857 → **0.714** | 0.325 → 0.727 → **0.714** |
+| calculation | 0.857 → 0.857 → **0.857** | — |
+| comparison | 0.917 → 0.750 → **0.833** | — |
+| out_of_scope | 0.900 → 0.300 → **0.900** | 0.533 → 0.067 → **0.333** |
+
+**Lookup, the class this was aimed at, roughly doubled on the golden set —
+0.325 → 0.714, +38.9 points.** That is the least-biased figure available: those
+77 lookups were LLM-generated in Phase 1, months before this module existed, and
+were not touched today.
+
+> **Provenance, 2026-08-19 — both rows now confirmed by the user.** Golden:
+> 0.6522 / lookup 55/77 / out_of_scope 5/15. Agent set: 0.8200, per-route
+> 12/14 calculation, 10/12 comparison, 10/14 lookup, 9/10 out_of_scope. Both
+> reproduced exactly. The rest of the Phase 3 suite was reproduced in the same
+> session: calculator 10/10, gate 26/26, task-set build 50 items with all
+> citations and figures verified.
+>
+> **Exemplar correction — final measured state, 2026-08-20.** The
+> commercial-property out_of_scope exemplar went through reword then removal
+> (D-25 addendum). Golden set, all three states run by the user:
+>
+> | State | Accuracy | lookup | out_of_scope |
+> |---|---|---|---|
+> | v2, `"...fire insurance policy for a shop..."` | 0.6522 | 55/77 | 5/15 |
+> | reworded to `"...shopkeeper's policy...business premises"` | 0.6522 | 55/77 | 5/15 |
+> | **removed** | **0.6630** | **56/77** | **5/15** |
+>
+> The reword was exactly neutral — it cleared `g-051` and took `g-045` in its
+> place, both home-policy questions. Removal cleared both and cost nothing on
+> the negatives, confirming the exemplar was pure liability against this corpus.
+> **Golden accuracy of record: 0.6630.** The agent-set row (0.8200) predates the
+> removal; none of its out_of_scope items are commercial-property, so it is
+> expected to be unchanged, but it has not been re-run.
+
+**`v1` was wrong and the measurement caught it.** The first revision replaced the
+out_of_scope insurance lines (motor, travel, marine, crop) with disjoint ones to
+break contamination against `agent_tasks.jsonl`. Out-of-scope recall collapsed —
+golden 0.533 → 0.067 — because golden's 15 hand-seeded negatives *are* those
+lines (4 travel, 3 motor, 3 marine, 1 crop). The contamination was only ever with
+the agent set; the exemplars were carrying real signal. Restored in v2.
+
+#### Three caveats, and the third is the one that matters
+
+1. **This is a fitted number.** Exemplars were revised while looking at these two
+   sets. The revisions target stated structural defects rather than individual
+   failures (D-25's P1–P4), but that is an assurance, not a control.
+2. **On the realistic distribution the router still loses to a constant.** Golden
+   0.652 against a 0.837 majority baseline. Lookup improved hugely; the overall
+   verdict on that set did not change.
+3. **Cost-weighted, that comparison is the wrong one.** Routes are additive, so
+   misroutes are not equal:
+
+| | agent_tasks | golden |
+|---|---|---|
+| Harmful (calculation misrouted → calculator never fires, LLM does arithmetic) | **2** | **0** |
+| Recoverable (out_of_scope → a retrieving route; the D-23 gate refuses these, 15/15 on these exact items) | 1 | 10 |
+| Benign (lookup/comparison → extra stage, answer still reachable) | 6 | 22 |
+
+Both remaining harmful cases are `t-027` and `t-028` — the two tasks flagged
+`requires_unimplemented`, which no tool can settle regardless of routing.
+`t-019`/`t-020`, harmful before, now route correctly: P2 removed the "knee
+surgery" noun from a comparison exemplar.
+
+**The router's value is in the `calculation` route specifically** — 0.857, and the
+calculator firing is what keeps CLAUDE.md's no-LLM-arithmetic rule enforceable.
+"Always lookup" scores 0.837 on golden and **0.000 on calculation**, a route
+golden does not contain. That is what the 50-task set was built to expose.
+
+### Phase 3 — confidence gate (D-23), 2026-08-17
+
+`python -m phase3_agents.confidence_gate --sweep --fine-grid --vs-generator ...`
+Offline re-analysis of retrieval run `mx-rr20-clean` (2026-08-17, rerank@20,
+`claimwise_mx__baai_bge_small_en_v1_5`, 92 items) joined to generation run
+`mx-rr20-gen`. **Zero cost — no LLM call, no retrieval re-run.** Self-test 26/26.
+
+**Top-1 cross-encoder score by class — read this before any threshold:**
+
+| Class | n | Mean | Median | Min | Max |
+|---|---:|---|---|---|---|
+| grounded (correct page reached the prompt) | 67 | 0.6837 | 0.7728 | **0.0414** | 0.9992 |
+| blind (positive, correct page did NOT) | 10 | **0.5061** | 0.5124 | 0.0073 | 0.9983 |
+| negative (unanswerable by construction) | 15 | **0.0964** | 0.0174 | 0.0006 | 0.7856 |
+
+**Adopted: `refuse_below: 0.02`.** Measured against the generator's own refusals,
+since the gate runs before it and the two compose:
+
+| | Generator alone | + gate @ 0.02 | Δ |
+|---|---|---|---|
+| Negatives refused | 14 / 15 | **15 / 15** | **+1, perfect** |
+| Blind positives refused | 1 / 10 | 1 / 10 | **0** |
+| New false refusals | — | **0 / 67** | **none** |
+| Generator calls skipped | 0 | **9** | latency + tokens saved |
+
+#### Two findings, and the second one matters more
+
+**1. P-14's recommended 0.20–0.25 was ~10× too high.** It was derived from the
+negatives alone and never priced what the same cut does to genuine hits. At 0.20
+the gate falsely refuses **9 of 67** answerable questions to gain one extra
+catch. The lowest-scoring *genuine* hit (`g-067`) sits at **0.0414**, so the
+entire usable band is narrower than the original grid's first step.
+
+**2. The gate does NOT fix the defect it was built for.** §1.7's hallucination
+— the generator answers when retrieval failed — is barely addressable by this
+signal. Blind positives average **0.5061**, far closer to grounded (0.6837) than
+to negatives (0.0964). At every threshold costing zero false refusals the gate
+catches **1–2 of 10**; reaching 7 of 10 costs 20–30 false refusals and drives net
+negative.
+
+The cross-encoder answers *"is this passage on-topic for this question"*, not
+*"does this passage contain the answer"*. Those coincide for an out-of-corpus
+question and come apart for an in-scope question whose specific clause was
+missed — which is exactly the blind set. **The confidence gate closes the
+out-of-scope hole; it does not close the ungrounded-answer hole.** That remains
+Phase 4's RAFT negatives, and this is now measured rather than assumed.
+
+The complementarity is nearly exact: the one negative the generator fails to
+refuse is **`g-099`, scoring 0.0008** — the second-lowest score in the whole set.
+The gate catches at any threshold above 0.001.
+
+**Caveats.** The 0.0414 ceiling is set by a single item, so the margin is the
+adoptable finding, not the exact value — 0.02 was chosen over the
+accuracy-optimal 0.04 for that reason (0.04 sits 0.0014 from `g-067`). The
+generation side of the join is the older 100-item run; 92 items intersect and
+only those were scored. Escalation band `[0.02, 0.50)` is a product judgement,
+not a tuned number — it flags 15 of 67 answerable questions (22%) for review.
+
 ### Phase 2 exit criterion
 
 | | Value |

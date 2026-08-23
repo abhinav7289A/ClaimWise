@@ -1158,6 +1158,413 @@ gets mistaken for a working one.
 
 ---
 
+### D-23 · Confidence gate ADOPTED at 0.02 — and it does not do what it was built to do
+**Date:** 2026-08-17 · **Status:** ✅ Adopted, with a documented negative result
+
+**What was built.** `phase3_agents/confidence_gate.py` — a deterministic branch
+that refuses *before* calling the generator when the rank-1 cross-encoder score
+says no retrieved passage supports an answer. Three verdicts (refuse / escalate /
+answer), covering both halves of CLAUDE.md Phase 3 task 5.
+
+**Why a gate rather than a better prompt.** The system prompt already instructs
+the model to refuse when the context lacks the answer, and it complies 23% of the
+time (§1.7). Asking a hosted free model more firmly is a request, not a control.
+A branch that never reaches the model cannot be overridden by one having a bad
+day. An insurer would call this a straight-through-processing threshold.
+
+**Measured for free.** `--sweep` re-analyses a *recorded* retrieval run rather
+than re-running retrieval: no LLM call, no model load, exactly reproducible from
+a file in the repo, and structurally unable to drift from the pipeline whose
+numbers are in METRICS.md. Self-test 26/26.
+
+#### Finding 1 — P-14's threshold was ~10× too high
+
+P-14 recommended 0.20–0.25 from the 15 negatives alone (mean 0.0985). It never
+priced the other side. The lowest-scoring **genuine** hit, `g-067`, scores
+**0.0414** — so the entire usable band sits below P-14's first candidate value.
+At 0.20 the gate falsely refuses **9 of 67** answerable questions to gain one
+extra catch.
+
+Adopted **0.02**, not the accuracy-optimal 0.04: 0.04 saves four more generator
+calls and catches one more ungrounded item, but sits 0.0014 from `g-067`.
+A threshold tuned into a 0.004-wide gap defined by a single item is fitted to the
+eval set, which is the same objection carried against D-19's strategy split.
+0.02 keeps a ~2× margin and gives up almost nothing.
+
+#### Finding 2 — the gate does not close the hole it was built to close
+
+The motivating defect (§1.7, §2.5) is that when retrieval fails, the generator
+invents an answer. The gate barely touches it:
+
+| Class | n | Mean top-1 |
+|---|---:|---|
+| grounded | 67 | 0.6837 |
+| **blind** (positive, evidence missed) | 10 | **0.5061** |
+| negative (unanswerable) | 15 | 0.0964 |
+
+Blind positives sit far closer to grounded than to negatives. At every threshold
+costing zero false refusals the gate catches **1–2 of 10**; catching 7 of 10
+costs 20–30 false refusals and drives net negative.
+
+**The reason is structural, and it is the interesting part.** A cross-encoder is
+trained to score *"is this passage relevant to this question"* — not *"does this
+passage contain the answer"*. For an out-of-corpus question those two questions
+have the same answer, so the score separates cleanly. For an in-scope question
+whose specific clause was missed, the retrieved prose is genuinely on-topic and
+the model says so, correctly. The signal is not weak; it is answering a different
+question than the one being asked of it.
+
+So the gate closes the **out-of-scope** hole and leaves the **ungrounded-answer**
+hole open. The latter stays with Phase 4's RAFT negatives — now measured rather
+than assumed, which also means Phase 4 has a concrete target and a baseline.
+
+#### What it actually buys
+
+Measured against the generator's own refusals, since the gate runs first and the
+two compose (`--vs-generator`, joining `mx-rr20-clean` to `mx-rr20-gen`, 92 items):
+
+| | Generator alone | + gate @ 0.02 |
+|---|---|---|
+| Negatives refused | 14 / 15 | **15 / 15** |
+| Blind positives refused | 1 / 10 | 1 / 10 |
+| New false refusals | — | **0 / 67** |
+| Generator calls skipped | 0 | **9** |
+
+The complementarity is almost exact: the single negative the generator misses is
+`g-099` at **0.0008**, the second-lowest score in the set. Refusal accuracy
+0.933 → **1.000**, at zero measured cost, deterministically, without a network
+call. Adopted on that basis — a smaller win than the one intended, and a real one.
+
+**Two defects found in this module before it produced a number**, both of the
+kind this project keeps hitting:
+
+1. `latest_items_file` sorted filenames lexically. Results carry two prefixes
+   (`retrieval_...` and `provisional_retrieval_...`) and `"r" > "p"`, so the
+   *oldest* run was selected as the newest. The first sweep therefore analysed
+   the Phase 1 dense baseline and reported a table of bi-encoder cosine — the
+   exact signal P-14 rejected — that looked entirely plausible. Now sorted on the
+   timestamp parsed out of the filename, which is also the only ordering that
+   survives a clone (mtime does not).
+2. Nothing checked *which pipeline* produced the scores. `top_score` is populated
+   with or without reranking, so a non-reranked run sweeps happily and produces
+   nonsense shaped like a result. `require_reranked()` now refuses unless the run
+   summary says `rerank: true`, with `--allow-unreranked` to reproduce P-14's
+   negative result deliberately.
+
+**Carried forward.** The 0.0414 ceiling rests on one item, so re-sweep after any
+retrieval change — this threshold is a property of the cross-encoder's score
+distribution, not a constant. The escalation band `[0.02, 0.50)` is a product
+judgement, not a tuned number: it flags 15 of 67 answerable questions (22%) for
+review.
+
+---
+
+### D-24 · The 50-task agent set, and what it did to D-22
+**Date:** 2026-08-18 · **Status:** ✅ Built and verified
+
+**Why authored rather than generated.** The Phase 1 golden set was LLM-generated
+then filtered, which suits lookup questions — there are hundreds of equally good
+ways to ask what the room-rent rule says. Calculation tasks are different: each
+needs a *provably correct rupee figure*, and a generated arithmetic question is
+exactly as likely to be wrong as the model that wrote it. This set is a
+regression suite, not a sample.
+
+**Two verification gates, both of which earned their place.**
+
+1. **Every citation is checked against the corpus at build time.** A task whose
+   "correct page" is wrong silently converts a working retriever into a failing
+   one, and that error is invisible in every downstream metric. Fifty
+   hand-written page numbers are fifty chances to record a wrong answer as
+   ground truth.
+2. **Every rupee figure is a hand-computed literal, checked against `settle()`.**
+   Ground truth produced by the tool under test cannot detect that tool's bugs —
+   the suite would agree with the calculator by construction, including when both
+   are wrong. The literal is ground truth; the calculator is what is being
+   checked. This caught one disagreement on the first run: `t-019` expected
+   `complete=False` on a waiting-period rejection, and the calculator was right —
+   `complete` means "no term had to be assumed", not "the claim succeeded".
+
+**The corpus constrains the set in a way worth recording.** These four PDFs are
+policy *wordings*, not policy *schedules*. Sum insured, room-rent limits and
+voluntary co-payment percentages are all "as specified in the Policy Schedule", a
+document we do not have. So calculation tasks state the user's plan parameters in
+the question and require retrieval to supply the *rule* with its page. That is
+also the real product shape: a user knows their sum insured; they do not know
+that a ₹6,000 room scales down their surgeon's fee. Two tasks (`t-025`, `t-039`)
+make this the point — their correct answer is a *provisional* figure plus a
+statement of what is missing, which is the "absent is not zero" contract the
+calculator was built around.
+
+**Two tasks describe calculations no tool can perform yet** (`t-027` home-contents
+depreciation, `t-028` ULIP withdrawal cap). Kept and flagged
+`requires_unimplemented`, because a task set containing only what the tools
+already do measures nothing about coverage.
+
+#### The finding: D-22 rejected the router on the wrong set
+
+Re-running the *unchanged* router against the new set:
+
+| Set | Items | Accuracy | Majority baseline | Margin |
+|---|---:|---|---|---|
+| `golden.jsonl` (2 routes) | 92 | 0.3587 | 0.8370 | **−47.8** |
+| **`agent_tasks.jsonl` (4 routes)** | 50 | **0.7800** | **0.2800** | **+50.0** |
+
+Per-route recall explains the reversal: comparison 0.917, out_of_scope 0.900,
+calculation 0.857, **lookup 0.500**. The golden set is 84% `lookup` — so it
+measures the router almost entirely on its one weak class, against a baseline
+that class defines. A classifier can be genuinely useful and still lose to
+"always predict the majority" on a set that is 84% majority.
+
+Cost-weighting sharpens it further. Because the routes are **additive** —
+retrieval runs for everything except `out_of_scope`, and the route selects what
+follows — misroutes are not equally bad. Only **3 of 50** are harmful:
+`t-019`/`t-020` (calculation → comparison, so the calculator never runs and an
+LLM does the arithmetic, which CLAUDE.md forbids outright) and `t-050`
+(out_of_scope → calculation). The other 8 are lookup → calculation/comparison,
+which buy an unnecessary stage and still reach the right answer.
+
+`t-019`/`t-020` are also diagnosable in one line, which is what the
+`nearest_exemplar` field was for: both matched *"Which of my policies is better
+for knee surgery?"*, so the words "knee surgery" sit in a comparison exemplar and
+pull calculation questions across. That is an exemplar-quality defect, not an
+architectural one.
+
+**D-22 is NOT reversed, and the router is NOT adopted.** Two reasons to hold:
+
+1. **Authorship bias.** The same person wrote these 50 tasks and holds the
+   exemplars in `router.py`. The tasks were not written to match the exemplars,
+   but that is an assurance, not a control. **0.78 is an upper bound.** D-19
+   carries the same objection about selecting a strategy on the eval set; it
+   applies here with more force, because here the author knew the label scheme.
+2. **Real traffic looks like the golden set, not like this one.** If production
+   is 84% lookup, a 0.500 lookup recall is the number that matters, and the
+   0.78 headline is measured on a distribution no user produces.
+
+**What this changes.** The next step is no longer "build an LLM router because
+the cheap one failed". It is: fix the lookup class — the exemplars are visibly
+too few and too narrow against 14 varied lookups — re-measure, and only then
+decide whether an LLM classifier earns its round trip.
+
+**Methodological note for the blog.** This is the second time in two decisions
+that a baseline changed a conclusion (see D-22's own note). There, a missing
+baseline made a bad classifier look fine; here, an unrepresentative *set* made a
+usable classifier look worthless. The accuracy figure was correct both times.
+
+---
+
+### D-25 · Router exemplars revised — lookup recall doubled, and one wrong turn on the way
+**Date:** 2026-08-18 · **Status:** ✅ Adopted (exemplars only; the mechanism is unchanged)
+
+**What changed.** Exemplars only — no change to `ExemplarRouter`. 32 → 54
+examples: lookup 10→22, calculation 8→10, comparison 6→10, out_of_scope 8→12.
+
+**How the defects were found, and why not by reading the failures.** Editing
+exemplars while looking at which questions failed is fitting to the eval set. The
+diagnosis instead came from the misroutes' `nearest_exemplar` field — the one
+added in D-22 so a misroute could be explained by reading one line. Three
+exemplars accounted for 36 of the 52 stolen golden lookups, which turns "the
+router is bad at lookup" into four statable defects in specific exemplars:
+
+| Exemplar | Golden lookups stolen | Defect |
+|---|---:|---|
+| "Should I claim under my health or my home policy?" | 19 | Comparative frame buried under generic domain nouns |
+| "How much will the insurer pay for my surgery?" | 10 | No user figures — identical in shape to a *limit lookup* |
+| "Does my travel insurance cover flight cancellation?" | 7 | "Does my X cover Y" is the commonest lookup phrasing there is |
+
+Plus a plain coverage gap: all ten lookup exemplars were health questions while
+the corpus is health, home and life.
+
+**The four principles applied** (stated in the module, each derivable from the
+exemplar text alone rather than from a failing item):
+
+- **P1** — lookup must cover the corpus; home and life had no representative.
+- **P2** — comparison exemplars carry comparative structure, not bare
+  high-frequency nouns.
+- **P3** — calculation exemplars must contain *the user's own figures*. The
+  discriminator against a limit lookup is not the words "how much" but whose
+  numbers they are. A limit lookup — "how much does the policy pay for an air
+  ambulance?" — was added to `lookup` so that boundary has both sides.
+- **P4** — out-of-scope exemplars lead with the out-of-scope domain.
+
+#### v1 was wrong, and measuring it is what said so
+
+P4 was first applied too broadly. The out_of_scope exemplars were near-duplicates
+of `agent_tasks.jsonl`'s out_of_scope items — "What is the premium for car
+insurance?" against `t-041` "What premium would I pay to insure my Honda City?" —
+because the same author wrote both, two days apart. v1 replaced the entire line
+set (motor, travel, marine, crop) with disjoint ones (fire, pet, mobile, cyber)
+to break that contamination.
+
+Out-of-scope recall collapsed: golden **0.533 → 0.067**, agent 0.900 → 0.300.
+
+The cause is that golden's 15 hand-seeded negatives *are* exactly those lines —
+four travel, three motor, three marine/cargo, one crop — and **golden is not
+contaminated**, having been written in Phase 1 before this module existed. The
+deleted exemplars were carrying real signal; only their overlap with the *agent*
+set was accidental. The contamination is in the newer set, and the fix is to
+report it as a caveat on that set's number, not to cripple the exemplars.
+
+Restored in v2, with only the genuine attractor reworded noun-forward.
+
+#### Results
+
+| | agent_tasks (50) | golden (92) |
+|---|---|---|
+| Majority baseline | 0.28 | 0.837 |
+| Before → **after** | 0.780 → **0.820** | 0.359 → **0.652** |
+| **lookup recall** | 0.500 → **0.714** | **0.325 → 0.714** |
+| out_of_scope recall | 0.900 → 0.900 | 0.533 → **0.333** |
+
+**Golden's lookup figure is the one to trust**: those 77 questions were
+LLM-generated in Phase 1, long before this module, and were not touched today —
+the closest thing to a held-out set available for the class being changed.
+
+**Out-of-scope regressed on golden and that is structural, not fixable by writing
+more examples.** A route is scored by its single best-matching exemplar, so
+lookup's 22 examples give it more chances to win than out_of_scope's 12. The
+trade is real and was declared before it was measured.
+
+It is also the *right* trade, because the two failure modes are not symmetric.
+An out_of_scope question misrouted to lookup costs one retrieval and is then
+**refused by the D-23 confidence gate** — measured at 15/15 combined with the
+generator on these exact 15 items. A lookup misrouted anywhere has no such
+downstream recovery. Cost-weighted, golden has **0 harmful misroutes** out of 32,
+and the agent set has 2 — both being `t-027`/`t-028`, the tasks flagged
+`requires_unimplemented`, which no tool can settle regardless of routing.
+`t-019`/`t-020`, harmful in D-24, now route correctly.
+
+**What this does and does not settle.** The router is adopted for the routes that
+justify it: `calculation` 0.857, which is what keeps the calculator firing and
+CLAUDE.md's no-LLM-arithmetic rule enforceable, and `comparison` 0.833. It is
+**still worse than "always lookup" on the golden set** (0.652 vs 0.837), and that
+comparison remains meaningless for the purpose the router exists to serve —
+the constant scores 0.000 on `calculation`, a route golden does not contain.
+
+**Stopping here on purpose.** Two revisions have now been measured against both
+sets. Further tuning would be trading out_of_scope against lookup by adjusting
+exemplar counts, which is fitting to these 142 items rather than improving
+routing. The honest next control is an independently authored task set, not a
+third revision.
+
+#### Addendum 2026-08-19 — one factual error corrected, one residual left standing
+
+The v2 golden run was re-executed by the user and reproduced exactly: accuracy
+**0.6522**, lookup **55/77 = 0.714**, out_of_scope **5/15 = 0.333**. Reading the
+misroute list surfaced two things, and they are different in kind.
+
+**1. A categorical error, corrected — `"What does a fire insurance policy for a
+shop cover?"`** This exemplar was added in v1 and kept in v2. Its intended
+out-of-scope signal was *commercial premises*, but it led with **fire**, a peril
+the SBI home policy actively covers. It pulled legitimate home lookups into a
+refusal: `g-051`, "if my air conditioner catches fire because of a short circuit,
+will the insurance cover...", routed `out_of_scope`.
+
+The rule it violated is worth stating because it is not obvious from D-25's P4:
+**an out-of-scope exemplar must name something the corpus does not hold. Naming a
+peril it does hold teaches the exact opposite of the route.** "Shop" was the
+out-of-scope part; "fire insurance" was not. Reworded to
+`"What does a shopkeeper's policy cover for my business premises?"` — commercial
+signal first, no peril at all.
+
+This is **not** a violation of the stopping rule above. That rule protects against
+trading recall between routes by adjusting exemplar counts against these 142
+items. Removing a statement that is wrong about the corpus is a correction of
+fact, and would be correct even if it lowered the score.
+
+**The reword failed on measurement, and the exemplar was removed instead.** The
+user re-ran the golden set. `g-051` cleared as intended — and `g-045` took its
+place, matching the new phrasing: *"Is my business covered if it's interrupted
+because I need to make changes to my equipment?"*, which is
+`sbigeneral__home__house-insurance.pdf` p.16, business-interruption wording.
+Aggregate accuracy did not move at all: **0.6522 before and after**, lookup 55/77,
+out_of_scope 5/15, identical confusion matrix. One victim was swapped for another.
+
+The reword was recommended on the assumption that the home policy does not hold
+"business premises". `g-045` disproves it — the policy carries
+business-interruption language — so the replacement failed the *same* categorical
+test as the original, and the honest conclusion is that **no commercial-property
+exemplar belongs on this route for this corpus.** Removed outright. Commercial
+cover is still represented by the professional-indemnity and
+workmen's-compensation exemplars, which name lines the corpus genuinely lacks
+(and which back golden's own negatives `g-086` and `g-100`).
+
+**Removal measured, and it is the state of record:**
+
+| State | Golden accuracy | lookup | out_of_scope |
+|---|---|---|---|
+| v2 (fire phrasing) | 0.6522 | 55/77 | 5/15 |
+| reworded (shopkeeper phrasing) | 0.6522 | 55/77 | 5/15 |
+| **removed** | **0.6630** | **56/77** | **5/15** |
+
+Both victims cleared and the negatives did not move, which confirms the exemplar
+was pure liability against this corpus rather than a trade. Note the size of the
+win: **+1.1 points, one item.** Two rounds of careful correction on a real,
+categorical error bought a single question. That is the honest scale of
+exemplar-level fixes at this point, and it is the strongest argument yet that
+further router gains will not come from writing better examples.
+
+**Lesson worth carrying, and it is a cheap one to have learned twice.** Before
+adding an out-of-scope exemplar, grep the corpus for the nouns it contains. Both
+failures here were findable in seconds by searching `pages.jsonl` for "fire" and
+"business", and neither was found because the exemplar was written from intuition
+about what an insurance corpus *ought* to contain rather than from what this one
+does.
+
+**A hard case, deliberately not acted on.** `g-013` — "What safety gear do I need
+to wear when riding an all-terrain vehicle?" — routes `out_of_scope` against a
+`lookup` label. It is genuinely answerable, from an adventure-sports exclusion in
+`sbigeneral__health__alpha.pdf` p.10, but reads as out-of-scope on its surface and
+matched a crop-insurance exemplar on a weak margin (0.0521). This is a limit of
+surface-form routing, not a defect in a specific exemplar, and nothing short of an
+LLM classifier is likely to fix it.
+
+**2. A residual attractor, deliberately left alone —
+`"Which of my policies should I claim under for this?"`** This was v2's
+replacement for the 19-stealing `"Should I claim under my health or my home
+policy?"`, and it still accounts for 5 of the visible 32 golden misroutes
+(`g-009`, `g-024`, `g-040`, `g-044`, `g-053`). Its content is close to pure
+generic-insurance vocabulary — "my policies", "claim", "for this" — so P2's fix
+was partial rather than complete.
+
+Left in place on purpose. Chasing it means another measured round against the
+same items, which is precisely what the stopping rule exists to prevent. Recorded
+as a known defect to be revisited when an independently authored set exists.
+
+**3. A second residual, from the agent-set run — `"Is the pre-existing disease
+wait the same on both my policies?"`** It takes `t-002`, `t-004` and `t-007`,
+three of the four lookup→comparison misroutes. The cause is the same shape as the
+first residual: its topic, PED waiting periods, is the single most common lookup
+subject in this corpus, so a comparison exemplar built on it competes directly
+with the questions it should be distinguishing itself from.
+
+**This is a residual, not an error of fact, and the distinction is the whole
+point.** The fire exemplar was corrected because it asserted something false
+about the corpus — it offered a covered peril as an out-of-scope signal. This one
+asserts nothing false: it is a genuine comparison question that happens to sit on
+a crowded topic. Fixing it would be trading recall between routes against these
+same 142 items, which is exactly what the stopping rule forbids. Recorded, not
+touched.
+
+**Correction to the cost model used in D-24 and above.** Both entries classified
+`comparison → lookup` as *benign*, on the grounds that retrieval still runs. That
+is wrong. A comparison task carries `min_documents: 2`; routed to `lookup` it
+gets a single-document retrieval and can return a confident answer about one
+policy to a question about two. That is a degraded answer, not merely an extra
+stage. The corrected four-tier model, applied to the confirmed agent-set run:
+
+| Tier | Count | Items |
+|---|---:|---|
+| **Harmful** — calculation misrouted, calculator never fires, LLM does arithmetic | 2 | `t-027`, `t-028` — both `requires_unimplemented`, so no tool could settle them anyway; effectively **0** |
+| **Degrading** — comparison → lookup, one document answers a two-document question | 2 | `t-035`, `t-037` |
+| **Recoverable** — out_of_scope → a retrieving route; the D-23 gate refuses downstream | 1 | `t-050` |
+| **Benign** — lookup → comparison/calculation; extra stage, answer still reachable | 4 | `t-001`, `t-002`, `t-004`, `t-007` |
+
+The headline from D-24 and D-25 survives — no calculation task the tooling can
+actually serve is misrouted — but "0 harmful" was over-stated by folding
+comparison degradation into the benign tier.
+
+---
+
 ## Problems
 
 ### P-19 · The golden set held 8 duplicate questions, not 1
@@ -1338,7 +1745,13 @@ Open items inherited from Phase 1:
 [D-6](#d-6--embedding-model-bge-small-with-an-ab-deferred)'s deferred A/B.
 
 # Phase 3 — Agentic Layer
-⏳ Not started.
+🔄 In progress. State contract and claims calculator built (10/10 self-test).
+Exemplar router built, measured and **rejected** ([D-22](#d-22--embedding-exemplar-router-rejected--worse-than-a-constant)).
+Confidence gate built, swept and **adopted at 0.02** ([D-23](#d-23--confidence-gate-adopted-at-002--and-it-does-not-do-what-it-was-built-to-do)).
+50-task agent set built and verified; on it the router scores **0.78 vs a 0.28
+baseline**, so D-22's rejection was an eval-set artifact ([D-24](#d-24--the-50-task-agent-set-and-what-it-did-to-d-22)).
+Remaining: fix the router's lookup exemplars and re-measure, LangGraph assembly,
+agent eval harness, comparison agent.
 
 # Phase 4 — Supervised Fine-tuning
 ⏳ Not started. [P-10](#p-10--false-refusal-from-an-over-strict-grounding-contract)
