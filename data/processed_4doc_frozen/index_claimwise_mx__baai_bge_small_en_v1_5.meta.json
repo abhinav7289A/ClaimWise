@@ -1,0 +1,47 @@
+{
+  "created_at": "2026-08-15T18:41:27+00:00",
+  "input_path": "data/processed/mixed_chunks.jsonl",
+  "collection": "claimwise_mx__baai_bge_small_en_v1_5",
+  "settings": {
+    "model_name": "BAAI/bge-small-en-v1.5",
+    "device": "cpu",
+    "batch_size": 32,
+    "normalize": true,
+    "query_prefix": "Represent this sentence for searching relevant passages: ",
+    "qdrant_path": "qdrant_storage",
+    "collection_prefix": "claimwise_mx",
+    "distance": "cosine",
+    "default_user_id": "local-dev",
+    "upsert_batch_size": 128
+  },
+  "points_in_collection": 829,
+  "chunks_indexed": 829,
+  "vector_size": 384,
+  "embed_seconds": 35.04,
+  "upsert_seconds": 2.24,
+  "chunks_per_second": 23.7,
+  "smoke_query": "What is the waiting period for pre-existing diseases?",
+  "smoke_results": [
+    {
+      "score": 0.8102,
+      "page": 30,
+      "insurer": "starhealth",
+      "filename": "starhealth__health__comprehensive.pdf",
+      "snippet": "25. \u0007Optional Cover (Buy Back of Pre-Existing Disease Waiting Period): On payment of additional premium the Insured Person has the option to opt for reduction of waiting period in "
+    },
+    {
+      "score": 0.7795,
+      "page": 31,
+      "insurer": "starhealth",
+      "filename": "starhealth__health__comprehensive.pdf",
+      "snippet": "on portability stipulated by IRDAI, then waiting period for the same would be reduced to the extent of prior coverage D. \u0007Coverage under the policy after the expiry of 36 months fo"
+    },
+    {
+      "score": 0.7576,
+      "page": 21,
+      "insurer": "sbigeneral",
+      "filename": "sbigeneral__health__alpha.pdf",
+      "snippet": "ii. In case of enhancement of Sum Insured the exclusion shall apply afresh to the extent of Sum Insured increase. iii. If any of the specified disease / procedures falls under the "
+    }
+  ]
+}

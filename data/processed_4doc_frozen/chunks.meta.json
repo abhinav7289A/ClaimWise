@@ -1,0 +1,43 @@
+{
+  "created_at": "2026-08-11T10:54:26+00:00",
+  "input_path": "data/processed/pages.jsonl",
+  "output_path": "data/processed/chunks.jsonl",
+  "settings": {
+    "chunk_size": 1000,
+    "chunk_overlap": 150,
+    "min_chunk_chars": 50
+  },
+  "pages_in": 102,
+  "total_chunks": 653,
+  "min_chars": 52,
+  "median_chars": 945,
+  "mean_chars": 819,
+  "max_chars": 1000,
+  "over_embedding_budget": 0,
+  "per_document": [
+    {
+      "filename": "iciciprulife__life__prusmart.pdf",
+      "chunks": 128,
+      "pages": 8,
+      "mean_chars": 776
+    },
+    {
+      "filename": "sbigeneral__health__alpha.pdf",
+      "chunks": 230,
+      "pages": 30,
+      "mean_chars": 813
+    },
+    {
+      "filename": "sbigeneral__home__house-insurance.pdf",
+      "chunks": 134,
+      "pages": 17,
+      "mean_chars": 829
+    },
+    {
+      "filename": "starhealth__health__comprehensive.pdf",
+      "chunks": 161,
+      "pages": 47,
+      "mean_chars": 854
+    }
+  ]
+}

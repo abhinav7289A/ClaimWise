@@ -66,6 +66,7 @@ dependencies = [
     # chosen over a hand-rolled dispatch because Phase 5 needs streamed
     # intermediate node state, which is built in here and fiddly by hand.
     "langgraph>=0.2",
+    "modal>=1.5.4",
 ]
 
 [tool.uv]

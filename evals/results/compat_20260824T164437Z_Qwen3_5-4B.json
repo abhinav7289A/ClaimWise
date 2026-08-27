@@ -1,0 +1,66 @@
+{
+  "model": "unsloth/Qwen3.5-4B",
+  "gpu": "L4",
+  "checks": [
+    {
+      "check": "dependency versions",
+      "ok": true,
+      "detail": "torch=2.11.0+cu130, transformers=5.5.0, peft=0.20.0, trl=0.24.0, unsloth=2026.8.19"
+    },
+    {
+      "check": "unsloth imports",
+      "ok": true,
+      "detail": "FastLanguageModel and FastVisionModel available"
+    },
+    {
+      "check": "model loads (bf16)",
+      "ok": true,
+      "detail": "loaded via FastVisionModel"
+    },
+    {
+      "check": "chat template",
+      "ok": true,
+      "detail": "7992 chars, renders 82 chars"
+    },
+    {
+      "check": "LoRA attaches",
+      "ok": true,
+      "detail": "32,464,896 trainable of 4,571,730,432 (0.710%)"
+    },
+    {
+      "check": "vision tower frozen",
+      "ok": true,
+      "detail": "0 trainable vision params (want 0)"
+    },
+    {
+      "check": "3 training steps",
+      "ok": true,
+      "detail": "losses [3.1007, 1.8829, 1.138]"
+    },
+    {
+      "check": "adapter saves",
+      "ok": true,
+      "detail": "7 files: ['README.md', 'adapter_config.json', 'adapter_model.safetensors', 'chat_template.jinja']"
+    }
+  ],
+  "peak_vram_gb": 9.08,
+  "verdict": "go",
+  "torch_version": "2.11.0+cu130",
+  "cuda_device": "NVIDIA L4",
+  "versions": {
+    "torch": "2.11.0+cu130",
+    "transformers": "5.5.0",
+    "peft": "0.20.0",
+    "trl": "0.24.0",
+    "unsloth": "2026.8.19"
+  },
+  "loader": "FastVisionModel",
+  "trainable_params": 32464896,
+  "total_params": 4571730432,
+  "losses": [
+    3.1007,
+    1.8829,
+    1.138
+  ],
+  "elapsed_s": 222.1
+}

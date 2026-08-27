@@ -1,0 +1,22 @@
+{
+  "model": "unsloth/Qwen3.5-4B",
+  "run_name": "sft-v1",
+  "smoke": false,
+  "versions": {
+    "torch": "2.11.0+cu130",
+    "transformers": "5.5.0"
+  },
+  "trainable_params": 32464896,
+  "train_rows": 938,
+  "val_rows": 104,
+  "rows_truncated": 0,
+  "steps": 236,
+  "train_loss": 0.2049,
+  "seconds_per_step": 13.37,
+  "train_runtime_s": 3156.3,
+  "load_overhead_s": 122.8,
+  "elapsed_s": 3279.1,
+  "peak_vram_gb": 12.49,
+  "eval_loss": 0.215,
+  "pushed": "AbhiCommits/claimwise-qwen35-4b"
+}

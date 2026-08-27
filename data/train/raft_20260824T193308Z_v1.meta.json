@@ -1,0 +1,48 @@
+{
+  "created_at": "2026-08-25T11:57:39.981206+00:00",
+  "collection_prefix": "claimwise_train",
+  "chunks_path": "data\\processed\\mixed_chunks.jsonl",
+  "questions_per_chunk": 1,
+  "seed": 3407,
+  "generator": {
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4-flash-0731"
+  },
+  "estimate": {
+    "input_tokens": 3290000,
+    "output_tokens": 355320,
+    "usd": 0.27
+  },
+  "stats": {
+    "questions": 1172,
+    "kept_lookup": 603,
+    "kept_negative": 257,
+    "kept_over_refusal": 119,
+    "dropped_duplicate": 12,
+    "dropped_holdout": 0,
+    "dropped_filter": 181,
+    "chunks_processed": 1316,
+    "drop_no_citation": 36,
+    "drop_empty": 95,
+    "drop_too_long": 46,
+    "drop_fabricated_citation": 4
+  },
+  "summary": {
+    "total": 979,
+    "by_slice": {
+      "lookup": 603,
+      "negative": 257,
+      "over_refusal": 119
+    },
+    "by_insurer": {
+      "hdfcergo": 267,
+      "sbigeneral": 180,
+      "iciciprulife": 131,
+      "starhealth": 74,
+      "nivabupa": 43,
+      "bajajallianz": 27
+    },
+    "oracle_present": 722,
+    "oracle_present_ratio": 0.7375
+  }
+}

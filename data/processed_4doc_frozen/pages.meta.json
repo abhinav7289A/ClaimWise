@@ -1,0 +1,54 @@
+{
+  "ingested_at": "2026-08-11T10:54:09+00:00",
+  "input_path": "data/raw",
+  "output_path": "data/processed/pages.jsonl",
+  "settings": {
+    "extraction_mode": "text",
+    "min_chars_per_page": 40,
+    "strip_repeated_lines": true,
+    "repeated_line_threshold": 0.6,
+    "repeated_line_edge_lines": 3,
+    "dehyphenate": true,
+    "normalize_unicode": true,
+    "repair_ligatures": true
+  },
+  "documents_ingested": 4,
+  "documents_failed": [],
+  "pages_kept": 102,
+  "total_chars": 491986,
+  "mean_chars_per_page": 4823,
+  "per_document": [
+    {
+      "filename": "iciciprulife__life__prusmart.pdf",
+      "doc_id": "2c3eee38a579",
+      "insurer": "iciciprulife",
+      "policy_type": "life",
+      "pages_kept": 8,
+      "chars": 93109
+    },
+    {
+      "filename": "sbigeneral__health__alpha.pdf",
+      "doc_id": "5b8f496626be",
+      "insurer": "sbigeneral",
+      "policy_type": "health",
+      "pages_kept": 30,
+      "chars": 175687
+    },
+    {
+      "filename": "sbigeneral__home__house-insurance.pdf",
+      "doc_id": "478aa61fb6e3",
+      "insurer": "sbigeneral",
+      "policy_type": "home",
+      "pages_kept": 17,
+      "chars": 100903
+    },
+    {
+      "filename": "starhealth__health__comprehensive.pdf",
+      "doc_id": "b1dbe8fb7864",
+      "insurer": "starhealth",
+      "policy_type": "health",
+      "pages_kept": 47,
+      "chars": 122287
+    }
+  ]
+}

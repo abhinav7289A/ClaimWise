@@ -1,0 +1,31 @@
+{
+  "created_at": "2026-08-26T20:36:42.651301+00:00",
+  "collection_prefix": "claimwise_train",
+  "seed": 3407,
+  "llm_calls": 0,
+  "usd": 0.0,
+  "stats": {
+    "chunks_processed": 1316,
+    "chunks_with_terms": 72,
+    "kept": 19,
+    "dropped_duplicate": 48,
+    "dropped_holdout": 0,
+    "dropped_no_template": 3,
+    "dropped_oracle_missing": 161,
+    "dropped_invalid_input": 0
+  },
+  "summary": {
+    "total": 19,
+    "by_slice": {
+      "calculation": 19
+    },
+    "by_insurer": {
+      "hdfcergo": 12,
+      "sbigeneral": 5,
+      "nivabupa": 1,
+      "starhealth": 1
+    },
+    "oracle_present": 19,
+    "oracle_present_ratio": 1.0
+  }
+}

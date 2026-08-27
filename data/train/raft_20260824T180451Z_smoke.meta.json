@@ -1,0 +1,41 @@
+{
+  "created_at": "2026-08-24T18:45:22.564832+00:00",
+  "collection_prefix": "claimwise_train",
+  "chunks_path": "data\\processed\\mixed_chunks.jsonl",
+  "questions_per_chunk": 1,
+  "seed": 3407,
+  "generator": {
+    "provider": "openrouter",
+    "model": "deepseek/deepseek-v4-flash-0731"
+  },
+  "estimate": {
+    "input_tokens": 125000,
+    "output_tokens": 13500,
+    "usd": 0.0103
+  },
+  "stats": {
+    "questions": 47,
+    "kept_lookup": 22,
+    "kept_negative": 7,
+    "kept_over_refusal": 5,
+    "dropped_duplicate": 0,
+    "dropped_holdout": 0,
+    "dropped_filter": 13
+  },
+  "summary": {
+    "total": 34,
+    "by_slice": {
+      "lookup": 22,
+      "negative": 7,
+      "over_refusal": 5
+    },
+    "by_insurer": {
+      "hdfcergo": 11,
+      "iciciprulife": 7,
+      "sbigeneral": 5,
+      "starhealth": 4
+    },
+    "oracle_present": 27,
+    "oracle_present_ratio": 0.7941
+  }
+}

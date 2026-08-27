@@ -1,0 +1,47 @@
+{
+  "created_at": "2026-08-15T07:08:31+00:00",
+  "input_path": "data/processed/children.jsonl",
+  "collection": "claimwise_pd__baai_bge_small_en_v1_5",
+  "settings": {
+    "model_name": "BAAI/bge-small-en-v1.5",
+    "device": "cpu",
+    "batch_size": 32,
+    "normalize": true,
+    "query_prefix": "Represent this sentence for searching relevant passages: ",
+    "qdrant_path": "qdrant_storage",
+    "collection_prefix": "claimwise_pd",
+    "distance": "cosine",
+    "default_user_id": "local-dev",
+    "upsert_batch_size": 128
+  },
+  "points_in_collection": 1644,
+  "chunks_indexed": 1644,
+  "vector_size": 384,
+  "embed_seconds": 60.5,
+  "upsert_seconds": 10.96,
+  "chunks_per_second": 27.2,
+  "smoke_query": "What is the waiting period for pre-existing diseases?",
+  "smoke_results": [
+    {
+      "score": 0.8246,
+      "page": 30,
+      "insurer": "starhealth",
+      "filename": "starhealth__health__comprehensive.pdf",
+      "snippet": "25. \u0007Optional Cover (Buy Back of Pre-Existing Disease Waiting Period): On payment of additional premium the Insured Person has the option to opt for reduction of waiting period in "
+    },
+    {
+      "score": 0.809,
+      "page": 21,
+      "insurer": "sbigeneral",
+      "filename": "sbigeneral__health__alpha.pdf",
+      "snippet": "iv. Coverage under the Policy after expiry of 24 months for any Pre-Existing Disease (PED) is subject to the same being declared at the time of application and accepted by Us. 12.2"
+    },
+    {
+      "score": 0.7845,
+      "page": 19,
+      "insurer": "sbigeneral",
+      "filename": "sbigeneral__health__alpha.pdf",
+      "snippet": "Under this benefit, We will change the 24 months Waiting Period for Pre-Existing Diseases (PED) specified in Section 12, point no. 12.1 of this document, to the number of months as"
+    }
+  ]
+}

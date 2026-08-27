@@ -1754,9 +1754,233 @@ Remaining: fix the router's lookup exemplars and re-measure, LangGraph assembly,
 agent eval harness, comparison agent.
 
 # Phase 4 — Supervised Fine-tuning
-⏳ Not started. [P-10](#p-10--false-refusal-from-an-over-strict-grounding-contract)
+🔄 In progress. Corpus expanded 4 → 10 documents (D-29). RAFT data to be
+generated from our own corpus; public insurance QA sets rejected (D-30). QLoRA
+replaced by bf16 LoRA, against CLAUDE.md's written plan (D-31). The first
+compatibility probe failed on a dependency skew and told us nothing about the
+model (P-20). [P-10](#p-10--false-refusal-from-an-over-strict-grounding-contract)
 is a ready-made training case for the "answer when the context supports it" half
 of the RAFT dataset.
+
+## Decisions
+
+### D-29 · Corpus expanded 4 → 10 documents, with a frozen eval index
+
+**What forced it.** The question was whether 4 policies could support a robust
+fine-tune. They cannot, and the reason is arithmetic rather than taste.
+
+| | Before | After |
+|---|---|---|
+| Documents | 4 | **10** |
+| Pages | 102 | **377** |
+| Chunks | 829 | **1,863** |
+| Policy types | 3 | **4** (motor added) |
+| Insurers | 3 | 5 |
+
+829 chunks, of which maybe 60–70% are substantive rather than boilerplate,
+supports roughly 1,000–1,500 unique questions after `question_fingerprint()`
+dedupe — not the 3–5k CLAUDE.md asks for. More importantly, three insurers cannot
+produce the distractor that matters most: **another insurer's clause on the same
+topic**. Random distractors are easy; near-misses from a competitor's wording are
+what the model actually confuses at inference.
+
+**Options considered**
+
+| | Approach | Rejected because |
+|---|---|---|
+| Stay at 4 documents | Free, no work | ~1,200 examples; model learns three insurers' formatting while the product accepts arbitrary uploads |
+| Buy or license a corpus | Curated, larger | No budget, and redistribution licensing is unclear |
+| **Expand from public sources** | **Chosen** | IRDAI mandates published policy wordings; ingestion is CPU-only and free |
+
+**The trap, and the mitigation.** Adding documents changes retrieval, so
+`hit@5 0.870` — measured on the 4-document index — would stop being comparable
+and Phase 2's whole evidence trail would evaporate. Two collections instead of
+one:
+
+* `claimwise_mx__baai_bge_small_en_v1_5` — **frozen at 4 documents.** Every
+  Phase 1–3 number stays reproducible against it.
+* `claimwise_train__baai_bge_small_en_v1_5` — 1,863 vectors over 10 documents,
+  used only to generate training data.
+
+Training on a broader corpus than you evaluate on is the safe direction: more
+variety than inference will show, not less. `data/processed_4doc_frozen/` holds
+the original chunk set, because `data/processed/` is gitignored and the re-ingest
+overwrote it in place.
+
+**Visible immediately in the smoke query.** *"What is the waiting period for
+pre-existing diseases?"* now returns Star p.30, HDFC p.26, HDFC p.49 — three
+documents from two insurers competing on one query. That is the hard-distractor
+pool the 4-document corpus could not produce.
+
+**Known weaknesses, recorded rather than hidden.** 4 of the 7 health policies are
+HDFC ERGO, so insurer concentration improved but is not balanced. The motor
+document is a **commercial-vehicle** wording while CLAUDE.md §3 names car
+insurance specifically. Home and life remain at one document each, so neither can
+be compared against a peer.
+
+---
+
+### D-30 · RAFT data generated from our own corpus; public insurance QA rejected
+
+**What was surveyed** before deciding to generate:
+
+| Dataset | Size | Verdict |
+|---|---|---|
+| `deccan-ai/insuranceQA-v2` | 27,987 rows | **No context column.** Unlicensed (reconstructed from a 2015 IEEE paper), US-centric |
+| `bitext/Bitext-insurance-llm-chatbot` | 5.13M tokens | Conversational/intent data, not grounded QA |
+| `pashas/insurance-ai-reliability-benchmark` | 510 scenarios | Eval set |
+| `rhesis/Insurance-ChatBot-TestBench` | 80 prompts | Eval set |
+
+**Why size did not save them.** The blocker is structural. A RAFT example is
+`(question + the passages our retriever actually returned) → a grounded, cited
+answer`. Every public set above is question-and-answer only. Training on them
+would push insurance *facts into the weights* — precisely what CLAUDE.md §3
+forbids, because facts go stale and cannot be cited to a page.
+
+**What we have instead, and why it beats a download**
+
+* **Real contexts** — produced by our own retriever against our own index, so the
+  training distribution matches the inference distribution.
+* **Real distractors** — the chunks the reranker returned at ranks 2–5 that were
+  *not* the evidence page. The RAFT paper samples random irrelevant chunks;
+  near-misses are strictly harder and strictly more realistic.
+* **Real negatives** — the eight documented permanent retrieval misses (`g-002`,
+  `g-012`, `g-017`, `g-030`, `g-041`, `g-058`, `g-069`, `g-076`) are cases where
+  retrieval genuinely fails, so the "answer not in context" examples are observed
+  rather than imagined.
+* **Free perfect labels for calculation** — `evals/build_agent_tasks.py` already
+  extracts real policy terms with pages, runs `settle()`, and refuses to write on
+  any disagreement. Pointed at the whole corpus it yields examples whose rupee
+  figures and citations are correct *by construction*, at zero token cost.
+
+**Planned composition, ~3,000 examples**
+
+| Slice | Source | ~Count | LLM cost |
+|---|---|---|---|
+| Lookup, oracle present | Free model writes Q + cited answer | 1,500 | paid |
+| Comparison, two-doc context | Same, across two policies | 200 | paid |
+| Calculation | Template + extracted terms + `settle()` | 600 | **free** |
+| No-oracle negatives | Existing Q, oracle removed, answer = refusal | 500 | **free** |
+| Over-refusal positives | Answerable Q, weak-but-sufficient context | 200 | **free** |
+
+Only ~1,700 need a model, which is why the estimate is ~$0.30 rather than ~$0.70
+against **~$1.60 remaining on OpenRouter** — the only paid path, with NIM
+unreachable and HF's balance exhausted.
+
+**Contamination rule.** The 92-question golden set and the 50-task agent set are
+**holdout and must never enter training.** If they do, the fine-tuned-vs-base
+comparison that is the entire point of the phase becomes meaningless.
+Deduplication runs against the golden set with `question_fingerprint()` from
+`phase1_rag/build_eval_set.py`.
+
+**Quality filtering is deterministic and reuses existing code.** No LLM judge:
+`verify_citations` (the cited page must be the oracle's page),
+`verify_computed_figures` (every rupee amount must be one the calculator
+produced), `question_fingerprint()` (dedupe), plus a length cap.
+
+---
+
+### D-31 · bf16 LoRA, not QLoRA — contradicting the written plan
+
+CLAUDE.md §5 Phase 4 task 3 specifies *"QLoRA as a Modal app"*. Unsloth's own
+Qwen3.5 documentation says the opposite:
+
+> "It is not recommended to do QLoRA (4-bit) training on the Qwen3.5 models, no
+> matter MoE or dense, due to higher than normal quantization differences."
+
+**Decision: bf16 LoRA.** The plan predates Qwen3.5's release. A 4-bit run that
+trains without error but degrades the model is the worst available outcome — it
+fails silently, and we would attribute the weakness to the dataset.
+
+**Cost consequence is mild.** bf16 LoRA on the 4B needs ~10GB, which fits Modal's
+L4 (24GB, $0.000222/s ≈ $0.80/hr) with room to spare. A 3–5k-example run over 2–3
+epochs should land around **$2–4** against the $30 cap with $5 reserved for
+Phase 5. Peak VRAM is measured by `check_compat.py` rather than assumed, and that
+measurement sizes the real run's GPU.
+
+## Problems
+
+### P-20 · The first compat probe failed before it tested anything
+
+**Status:** ✅ Resolved 2026-08-24. Third run returned **GO**: all seven checks
+passed in 222.1s, peak VRAM **9.08 GB**, 32,464,896 trainable parameters
+(0.710%) via `FastVisionModel` with the vision tower frozen at zero.
+**Qwen3.5-4B is trainable with bf16 LoRA and the Qwen3-4B fallback is not
+needed.** Total cost of the three probe runs: **$0.077**, of which $0.028 was
+spent on two failures that were both this file's bugs rather than the model's
+limits.
+
+**What 9.08 GB means for `train_modal.py`.** 4,571,730,432 parameters at 2 bytes
+is 9.14 GB, so the measurement is almost entirely weights — activations at batch
+2 × 256 tokens are negligible. Training adds LoRA gradients (~0.07 GB), AdamW
+moments (~0.26 GB) and activations at seq_len 2048 with gradient checkpointing
+(~2-4 GB), for **~12-14 GB total**. An L4 at 24 GB carries that with headroom, so
+the cheaper GPU is confirmed rather than assumed and A10G rates are unnecessary.
+
+**What happened.** `modal run phase4_finetune/check_compat.py` on 2026-08-24
+returned `verdict: FALLBACK` after **8.3 seconds**, costing $0.002:
+
+```
+[FAIL]  unsloth imports: Exception: module 'torch.utils._pytree' has no attribute ...
+```
+
+**Why the verdict is worthless.** The failure is at `from unsloth import ...`,
+before any model is downloaded or loaded. It says nothing about whether
+Qwen3.5-4B accepts a LoRA adapter. Running the documented fallback
+(`unsloth/Qwen3-4B`) would have failed identically at the same line — and would
+have looked like confirmation that *both* models were unsupported.
+
+**Root cause.** The Modal image pinned `torch==2.6.0` alongside
+`transformers>=4.57.0` and an unpinned `unsloth`. `torch.utils._pytree` attribute
+errors are the standard signature of a transformers/torch skew: three
+hand-picked pins that must stay mutually consistent across releases, and did not.
+
+**Fix.** Stop pinning. `pip_install("unsloth", "unsloth_zoo", "hf_transfer")`
+lets Unsloth resolve its own consistent stack. `hf_transfer` was added while
+there, since the ~8GB weight download is most of a cold run's billed seconds.
+
+**Prevention.** A new **Check 0** reports the resolved versions of torch,
+transformers, peft, trl and unsloth *before* the unsloth import is attempted. The
+first probe left no way to tell what had actually been installed; a skew is
+obvious from those five values and invisible without them.
+
+**The lesson, and it is the same one as P-18 and the `--rag-baseline` guard.** A
+failure in setup must never be reportable as a failure of the thing under test.
+This probe was built to answer "is this model trainable" and answered "no" when
+it had not asked the question.
+
+**Second run, 2026-08-24 12:57 — and the answer is yes.** With the pins removed,
+six of seven checks passed in 116.2s (~$0.026):
+
+```
+torch=2.11.0+cu130, transformers=5.5.0, peft=0.20.0, trl=0.24.0, unsloth=2026.8.19
+[PASS]  model loads (bf16): loaded via FastVisionModel
+[PASS]  chat template: 7992 chars
+[PASS]  LoRA attaches: 32,464,896 trainable of 4,571,730,432 (0.710%)
+[PASS]  vision tower frozen: 0 trainable vision params (want 0)
+[FAIL]  3 training steps: ValueError: Incorrect image source...
+```
+
+**Qwen3.5-4B accepts a LoRA adapter.** That was the question the phase hinged on,
+and it is answered: 32.5M trainable parameters attached to the language layers,
+with the vision tower verifiably frozen at zero. The fallback to Qwen3-4B is not
+needed.
+
+**The remaining failure was the probe again, twice over.**
+`FastVisionModel.from_pretrained` returns a **processor**, not a tokenizer — its
+signature is `(images=..., text=...)`, so a positional list of strings is read as
+image sources. Hence `"Incorrect image source... Got Question: Is knee surgery
+covered?"`. Fixed by reaching through to `processor.tokenizer`, which exists on
+the wrapper and is absent on a plain language model, so `getattr(tokenizer,
+"tokenizer", tokenizer)` handles both loaders.
+
+**The same lesson landing twice in one file is itself the finding.** Both
+failures were the harness, both reported as `verdict: FALLBACK`, and both would
+have justified abandoning a model that works. A probe needs to distinguish "the
+subject failed" from "I failed to ask" — the seven independent checks did exactly
+that, which is the only reason the misdiagnosis was visible instead of
+persuasive. **Peak VRAM is still unmeasured**, because it is recorded during the
+step that failed, and `train_modal.py` needs it to size the GPU.
 
 # Phase 4.5 — Post-training
 ⏳ Not started, credit-gated.

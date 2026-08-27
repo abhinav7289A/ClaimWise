@@ -1,0 +1,33 @@
+{
+  "created_at": "2026-08-27T13:55:30.205496+00:00",
+  "collection_prefix": "claimwise_mx",
+  "golden": "data/eval/golden.jsonl",
+  "n_questions": 10,
+  "max_new_tokens": 320,
+  "models": {
+    "unsloth/Qwen3.5-4B": {
+      "n_total": 10,
+      "n_positive": 10,
+      "n_negative": 0,
+      "refusal_accuracy_on_negatives": null,
+      "over_refusal_on_positives": 0.0,
+      "citation_present": 0.2,
+      "hallucinated_citation_rate": 0.0,
+      "cited_correct_page": 0.1,
+      "figures_preserved": 0.8,
+      "n_scored_for_figures": 5
+    },
+    "AbhiCommits/claimwise-qwen35-4b": {
+      "n_total": 10,
+      "n_positive": 10,
+      "n_negative": 0,
+      "refusal_accuracy_on_negatives": null,
+      "over_refusal_on_positives": 0.0,
+      "citation_present": 0.7,
+      "hallucinated_citation_rate": 0.0,
+      "cited_correct_page": 0.5,
+      "figures_preserved": 0.8,
+      "n_scored_for_figures": 5
+    }
+  }
+}

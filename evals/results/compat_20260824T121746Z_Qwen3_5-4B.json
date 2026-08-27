@@ -1,0 +1,16 @@
+{
+  "model": "unsloth/Qwen3.5-4B",
+  "gpu": "L4",
+  "checks": [
+    {
+      "check": "unsloth imports",
+      "ok": false,
+      "detail": "Exception: module 'torch.utils._pytree' has no attribute 'register_constant'"
+    }
+  ],
+  "peak_vram_gb": null,
+  "verdict": "fallback",
+  "torch_version": "2.6.0+cu124",
+  "cuda_device": "NVIDIA L4",
+  "elapsed_s": 8.3
+}

@@ -701,7 +701,128 @@ just that they finished.**
 
 ---
 
-## 8. Open decisions
+## 8. Phase 4 — supervised fine-tuning
+
+### 8.1 The division of labour, restated
+
+This is the part of the project most easily misunderstood, so it is worth being
+blunt about it. **RAG supplies knowledge. Fine-tuning supplies skill.**
+
+The model is never taught what any policy says. Policy content reaches it only
+through the prompt, at inference time, from the retriever. What fine-tuning
+changes is *behaviour over context*: stay inside the passages you were handed,
+cite the page you used, and say "not covered in your policy" when the passages
+do not contain the answer.
+
+That framing is forced by the domain. Insurance wordings are revised every year;
+anything baked into weights goes stale and, worse, cannot be cited to a page. An
+uncitable number is not an answer this project is willing to give.
+
+### 8.2 Why RAFT, and what an example looks like
+
+RAFT — retrieval-augmented fine-tuning — trains on the situation the model will
+actually face rather than on clean question-answer pairs. Each example is:
+
+```
+question + [oracle chunk, distractor, distractor, distractor] -> grounded, cited answer
+```
+
+The distractors are the point. A model trained only on clean context learns to
+trust whatever it is given; a model trained with distractors learns to *select*.
+And a fraction of examples deliberately omit the oracle entirely, with the
+refusal sentence as the target — that is what teaches declining rather than
+inventing.
+
+The failure modes this targets are measured, not imagined:
+
+| Defect | Measured | RAFT slice that targets it |
+|---|---|---|
+| Over-refusal when the answer is present | plain RAG refused 14/26 answerable tasks (P-10) | over-refusal positives |
+| Invention when retrieval misses | 20→10 absolute hallucinations across Phases 1–2 | no-oracle negatives |
+| Garbled computed figures | the ₹240,000 → ₹240,0000 corruption | calculation examples with exact figures |
+| Missing or wrong citations | fabricated citations held at 0.000 by deterministic guards, not by the model | oracle-cited answers |
+
+### 8.3 Where the data comes from
+
+Public insurance QA datasets were surveyed and rejected — every one is
+question-and-answer only, with no context column, so none can teach grounding
+(decisions.md D-30). The dataset is generated from our own corpus instead, which
+turns out to be the stronger option:
+
+* **Contexts** come from our own retriever against our own index, so training
+  distribution matches inference distribution.
+* **Distractors** are the chunks the reranker actually returned at ranks 2–5 that
+  were not the evidence page — near-misses, which are harder than the random
+  irrelevant chunks the RAFT paper uses.
+* **Negatives** are the eight permanent retrieval misses documented in Phase 1,
+  so "answer not in context" examples are observed rather than invented.
+* **Calculation labels are free and exact.** `evals/build_agent_tasks.py` already
+  extracts real policy terms with pages, runs `settle()`, and refuses to write on
+  any disagreement. Its figures are correct by construction.
+
+To make that viable the corpus was expanded from 4 documents to 10 — 102 → 377
+pages, 829 → 1,863 chunks, and motor added as a fourth policy type (D-29). Three
+insurers could not produce the distractor that matters most: another insurer's
+clause on the same topic.
+
+**Two collections, deliberately.** `claimwise_mx__*` stays frozen at 4 documents
+so every Phase 1–3 number remains reproducible; `claimwise_train__*` holds the
+1,863-vector expanded index and is used only to generate training data. Training
+on a broader corpus than you evaluate on is the safe direction.
+
+**The golden set and the agent task set are holdout.** They never enter training.
+If they did, the fine-tuned-vs-base comparison — the entire point of the phase —
+would measure nothing.
+
+### 8.4 How the phase is executed
+
+| Step | File | Runs on | Cost |
+|---|---|---|---|
+| 1 | `check_compat.py` | Modal, L4 | ~$0.13 cold, ~$0.04 warm |
+| 2 | `gen_dataset.py` | local CPU + OpenRouter | ~$0.30 |
+| 3 | `train_modal.py` | Modal, L4/A10G | ~$2–4 |
+| 4 | `benchmark.py` | local, through the existing pipeline | ~$0.05 |
+
+**Step 1 exists to buy information cheaply.** Qwen3.5 combines Gated DeltaNet
+layers with a sparse MoE, and LoRA libraries support new architectures weeks
+after the weights ship. If no injection points are defined, `get_peft_model`
+either raises or — worse — attaches to nothing and trains a no-op that costs a
+full run to discover. The probe loads the model, attaches an adapter, takes three
+optimiser steps, saves, and reports seven checks independently so a failure names
+the missing capability rather than emitting a traceback.
+
+It also measures **peak VRAM**, which sizes step 3's GPU from a measurement
+rather than a guess — and it settles the quantisation question. CLAUDE.md's plan
+said QLoRA; Unsloth now advises against 4-bit on Qwen3.5, so the probe tests bf16
+LoRA instead (D-31).
+
+**The first run of step 1 failed without testing anything** — a torch/transformers
+skew in the Modal image killed the unsloth import 8.3 seconds in, before any
+model was touched, and reported `FALLBACK`. The verdict was uninformative; the
+fallback model would have failed identically at the same line. Fixed by letting
+Unsloth resolve its own dependency stack, and a new Check 0 now prints resolved
+versions *before* the import so the next skew names itself (P-20).
+
+**Vision is preserved by freezing, and the freeze is verified.** The RAFT dataset
+is text-only for budget reasons, so the LoRA touches language layers only —
+`finetune_vision_layers=False`. A config flag that is silently ignored would let
+vision weights drift with no error anywhere, so the probe counts trainable vision
+parameters and expects zero.
+
+### 8.5 What Phase 4 must prove
+
+The exit criterion is not "the loss went down". It is the **generator swap**:
+fine-tuned versus base versus a large API model, through the *identical*
+retrieval pipeline, on the holdout sets. Only the generator changes, so any
+difference is attributable to the fine-tune.
+
+Recorded alongside: RAGAS per generator, training cost in dollars, Modal credits
+remaining, inference cost per 1k queries, latency, and a 10-image sanity suite
+confirming vision did not regress.
+
+---
+
+## 9. Open decisions
 
 | Decision | Status |
 |---|---|

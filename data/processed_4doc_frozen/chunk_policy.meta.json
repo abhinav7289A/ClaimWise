@@ -1,0 +1,57 @@
+{
+  "created_at": "2026-08-15T18:40:35+00:00",
+  "density_threshold": 8000,
+  "settings": {
+    "density_threshold": 8000,
+    "child_size": 400,
+    "child_overlap": 50,
+    "parent_size": 2000,
+    "parent_overlap": 0,
+    "flat_size": 1000,
+    "flat_overlap": 150,
+    "min_chunk_chars": 50
+  },
+  "documents": [
+    {
+      "doc_id": "2c3eee38a579",
+      "filename": "iciciprulife__life__prusmart.pdf",
+      "policy_type": "life",
+      "pages": 8,
+      "total_chars": 93109,
+      "chars_per_page": 11638.6,
+      "strategy": "parent_child"
+    },
+    {
+      "doc_id": "478aa61fb6e3",
+      "filename": "sbigeneral__home__house-insurance.pdf",
+      "policy_type": "home",
+      "pages": 17,
+      "total_chars": 100903,
+      "chars_per_page": 5935.5,
+      "strategy": "flat"
+    },
+    {
+      "doc_id": "5b8f496626be",
+      "filename": "sbigeneral__health__alpha.pdf",
+      "policy_type": "health",
+      "pages": 30,
+      "total_chars": 175687,
+      "chars_per_page": 5856.2,
+      "strategy": "flat"
+    },
+    {
+      "doc_id": "b1dbe8fb7864",
+      "filename": "starhealth__health__comprehensive.pdf",
+      "policy_type": "health",
+      "pages": 47,
+      "total_chars": 122287,
+      "chars_per_page": 2601.9,
+      "strategy": "flat"
+    }
+  ],
+  "chunks_by_strategy": {
+    "parent_child": 304,
+    "flat": 525
+  },
+  "parents": 68
+}
