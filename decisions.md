@@ -1565,6 +1565,90 @@ comparison degradation into the benign tier.
 
 ---
 
+> **D-26, D-27 and D-28 were written on 2026-08-27, after Phase 3 closed.** They
+> record decisions taken between 2026-08-18 and 2026-08-22 that were implemented
+> in code but never entered here — the gap this file exists to prevent. They are
+> reconstructed from the code and the run notes, not from contemporaneous
+> writing, so **verify the specifics against the implementation before citing
+> them**. Backfilled entries are marked rather than passed off as same-day.
+
+### D-26 · Term precedence is per-term, not global
+**Date:** ~2026-08-21 · **Backfilled**
+
+**Decision.** When a policy term appears in both the retrieved document and the
+user's question, which wins is decided **per term type**, not by one global rule:
+
+- **The document wins** on policy-wide rules — waiting periods, co-payment
+  percentages, room-rent caps. These are properties of the contract.
+- **The user wins** on plan-scoped amounts — sum insured, deductible. These vary
+  by the plan variant the user actually bought, and the retrieved passage may
+  describe a different variant in the same PDF.
+
+**Why not a single rule.** "Document always wins" is wrong because a policy
+booklet lists every sum-insured tier, and the retrieved one is frequently not the
+user's. "User always wins" is worse: it lets a user assert a co-payment of 0% and
+have the calculator agree, which turns the tool into a rubber stamp.
+
+**Where it lives.** `term_extraction.merge_terms`. The same split is mirrored in
+`gen_calc_examples.build_case`, where the question carries the bill and the policy
+carries the rate — so the training rows and the serving path agree about where
+each number legitimately comes from.
+
+---
+
+### D-27 · Generator switched NIM → OpenRouter mid-phase
+**Date:** 2026-08-21 · **Backfilled**
+
+**Decision.** Move the generator from NVIDIA NIM to
+`openrouter/deepseek-v4-flash-0731` for the rest of Phase 3.
+
+**Why.** NIM is unreachable from this machine: **5 of 5 requests timed out**,
+each taking roughly **331 seconds to fail**. See
+[P-5](#p-5--nvidia-nim-requests-time-out) and P-13. A free tier that cannot be
+reached is not a free tier, and an eval loop that pays five and a half minutes
+per failure is not an eval loop.
+
+**The consequence is the important part, and it is a measurement cost, not a code
+cost.** Every agent-eval number recorded on or before 2026-08-20 was produced by a
+different generator from every number after it. **They are not comparable.** Any
+re-measurement must re-run *both* systems together rather than comparing a stored
+old number against a fresh one. This is the kind of silent invalidation that
+makes a metrics file lie, which is why it is recorded as a decision.
+
+**Cost.** OpenRouter is the only paid inference path in the project, against a
+~$2 budget. That is what made deterministic scoring the default in Phase 4's
+`benchmark.py` — a judge model would have spent the remainder.
+
+---
+
+### D-28 · The confidence gate is route-aware
+**Date:** ~2026-08-22 · **Backfilled**
+
+**Decision.** The D-23 confidence gate no longer applies one behaviour to every
+route. On `calculation` and `comparison`, a low-confidence result is **downgraded
+to escalation rather than refusal**.
+
+**Why.** A refusal on those two routes is almost always wrong in a way that is
+invisible to the user. A calculation question reaching the gate has usually
+already retrieved *something* and run the deterministic calculator; answering
+"that isn't covered in the policy documents you've uploaded" throws away a real
+computed settlement because a retrieval score sat below a threshold. Escalation
+keeps the work and routes it to a human, which is the honest response to "I found
+an answer but I am not confident in the passages behind it".
+
+**Why `lookup` keeps refusing.** A low-confidence lookup genuinely has nothing to
+offer — there is no tool output to preserve — and refusing is the correct and
+safest behaviour there.
+
+**Interaction with the Phase 4 fine-tune.** The 119 over-refusal training rows
+target the same failure at the generator level. The 2026-08-27 benchmark measured
+that the fine-tune *increased* over-refusal on positives (4/77 → 9/77) while
+improving refusal on negatives (10/15 → 14/15), so the gate and the generator now
+push in slightly opposite directions on this axis. That is worth re-measuring
+together rather than assuming they compose.
+
+---
+
 ## Problems
 
 ### P-19 · The golden set held 8 duplicate questions, not 1
@@ -1898,6 +1982,34 @@ epochs should land around **$2–4** against the $30 cap with $5 reserved for
 Phase 5. Peak VRAM is measured by `check_compat.py` rather than assumed, and that
 measurement sizes the real run's GPU.
 
+---
+
+### D-32 · Sequence length 4096, set by measurement rather than by the probe
+**Date:** 2026-08-27
+
+**Decision.** Train at `seq_len=4096`, not the 2048 the compat probe was measured
+at.
+
+**Why.** `build_train_split` reported the longest rendered user message at
+**10,652 characters**. Insurance prose is dense with digits and rupee figures,
+which tokenise worse than ordinary English — call it 3–3.5 chars per token rather
+than 4 — so that row lands near **3,000 tokens** before the system prompt and the
+target answer are added. At 2048 it would have been **silently truncated**, and
+truncation removes the end of the sequence: the cited page and the answer. We
+would have trained the model to stop citing on exactly the longest, most
+table-heavy contexts, and nothing would have raised.
+
+**Why not just drop the long rows.** They are the table-heavy sub-limit and
+room-rent passages, which is the content the calculator route depends on. Dropping
+them optimises the metric by deleting the hard cases.
+
+**Cost of the choice: none that mattered.** The probe measured 9.08 GB at 2048,
+almost entirely weights. The real run at 4096 peaked at **12.49 GB** against the
+L4's 24 GB, and `rows_truncated` came back **0**. The cheaper GPU still held.
+
+**Verified, not assumed** — `rows_truncated` is printed every run precisely so
+this decision is checkable rather than a hope.
+
 ## Problems
 
 ### P-20 · The first compat probe failed before it tested anything
@@ -1981,6 +2093,148 @@ subject failed" from "I failed to ask" — the seven independent checks did exac
 that, which is the only reason the misdiagnosis was visible instead of
 persuasive. **Peak VRAM is still unmeasured**, because it is recorded during the
 step that failed, and `train_modal.py` needs it to size the GPU.
+
+---
+
+### P-21 · TRL's SFTTrainer is unusable with Unsloth's Qwen3.5 loader
+**Date:** 2026-08-27 · **Status:** ✅ Worked around · **Cost:** 4 failed launches
+
+**Symptom.** Every attempt to construct `SFTTrainer` died with:
+
+```
+ValueError: The specified `eos_token` ('<EOS_TOKEN>') is not found in the
+vocabulary of the given `processing_class` (TokenizersBackend).
+```
+
+**Why this took four launches, and the lesson in it.** The first two failures
+looked like ordinary API drift — `SFTConfig` rejected `max_seq_length` (renamed
+to `max_length`), `SFTTrainer` wanted `processing_class` rather than `tokenizer`.
+The fix was to resolve field names against the installed signature at runtime.
+**That fix caused the next two failures.** `inspect.signature` on an
+Unsloth-patched class returns a `(*args, **kwargs)` shim reporting *no* real
+fields, so the filter silently dropped every setting — including the `eos_token`
+being set to repair the very error it was diagnosing. The run then rebuilt the
+config from defaults and failed identically, which read as "the fix didn't work"
+rather than "the fix was discarded".
+
+The diagnostic that broke the loop was printing the constructed object:
+`config eos/pad -> '<|im_end|>' / '<|vision_pad|>'` proved the config was correct
+while TRL still reported `'<EOS_TOKEN>'` — so the placeholder is injected *inside*
+Unsloth's patched `SFTTrainer.__init__`, downstream of anything the caller can
+reach. It does not resolve against Qwen3.5's `TokenizersBackend` processor.
+
+**Two rules out of this:**
+
+1. **Never introspect a patched class with `inspect.signature`.** Use
+   `dataclasses.fields`, which sees through the wrapper. Verified: the shim
+   reported nothing; `dataclasses.fields(SFTConfig)` reported **126**.
+2. **A filter that silently drops what it cannot place is worse than a crash.** A
+   `TypeError` names the problem. Dropping the key hides it and reproduces the
+   original symptom, which sends you looking in the wrong place.
+
+**Resolution: drop TRL from the training path entirely.** `transformers.Trainer`
+is unpatched and stable. The one thing `SFTTrainer` was providing — masking loss
+to the assistant turn — is twenty lines written directly, and the version written
+here is *better* than `train_on_responses_only`, which locates turn boundaries by
+matching chat-template marker strings and fails silently when a template changes.
+Instead the prompt is rendered twice, once without the assistant turn and once
+with, and everything before the answer's token offset becomes `-100`. No string
+matching, and the run prints how many label positions survived, so a masking bug
+is visible in the first ten lines rather than after an hour of training.
+
+**It worked first time after the switch**, and trained to `eval_loss` 0.2150.
+
+---
+
+### D-33 · Document scoping adopted; multi-document coverage is a *fetch-depth* problem, not a slot problem — closed as future scope
+**Date:** 2026-09-02 · **Status:** ✅ Adopted, with the target metric unmet ·
+**Cost:** $0 (deterministic, 0 LLM calls, local CPU)
+
+**Decision.** Adopt document scoping on the agent retrieval path. Accept
+`all-docs-covered@5 = 0.250` on the multi-document subset as the final Phase 3
+number, and close per-document coverage as documented future scope rather than
+spending more of the project's remaining time on it.
+
+**What was built.** The document resolver (D-29, technique 5) had been wired only
+into the *direct* Phase 2 path, where it scoped a global top-k. The comparison
+route's per-document quota — the code that actually reserves slots — never saw
+it, and instead fanned out to all four of the user's documents and used the
+relevance floor to *guess* which two the question was about. This change connects
+them: `resolve_scope` decides once, `retrieve_per_document(doc_ids=...)` fans out
+over the resolved documents only, `retrieve_scoped` is a new filtered sibling for
+the non-comparison routes, and the relevance floor stands down when the question
+named 2+ documents outright. `retrieve_global` was not touched, so every Phase 2
+number still reproduces.
+
+**The measurement.** `agent_tasks.jsonl`, 40 positives / 10 negatives, gold route
+labels, both runs through `phase3_agents.retrieval_node`:
+`retrievalagent_20260902T181934Z_agent-scope-off` vs
+`..._20260902T193229Z_agent-scope-on`.
+
+| metric | off | on |
+|---|---|---|
+| doc+page@5 | 0.600 | **0.650** |
+| doc+page@3 | 0.525 | **0.550** |
+| all docs cov@5 (overall) | 0.475 | **0.500** |
+| MRR | 0.4175 | **0.4279** |
+| page recall@5 | 0.5375 | **0.5750** |
+| complete misses | 15 | **14** |
+| latency median / p95 | 10896.7 / 18924.3 ms | **3595.6 / 5893.2 ms** |
+| comparison page hit@5 | 0.667 | **0.750** |
+| **multi-doc all-docs-cov@5** | **0.250** | **0.250 — UNMOVED** |
+
+Resolution mix over the 50 tasks: `insurer` 13, `plan` 8, `policy_type` 7,
+`policy_type/ambiguous` 5, `insurer/ambiguous` 1, `none` 16.
+
+**Adopted on everything except the metric it was built for.** Every other number
+improved, nothing regressed, and p95 latency fell **3.2x** — fanning out over 2
+resolved documents instead of 4 halves the searches and the cross-encoder passes.
+That alone justifies keeping it: the comparison route was the slowest path in the
+system and is now the same order as the others.
+
+**The finding that matters, and it overturns the D-29 diagnosis.** The 2026-08-27
+conclusion was "one document's chunks fill all five slots, so reserve slots per
+document." That is now measured and it is **wrong**. Reading the per-item file
+for the six half-answered comparison tasks:
+
+| task | required docs | reached both? | why it still fails |
+|---|---|---|---|
+| t-030 | 5b8f, b1db | **yes** | b1db returned pp. 16/15/31; needed 32 |
+| t-033 | 5b8f, b1db | **yes** | 5b8f returned pp. 12/17/5; needed 19 |
+| t-036 | 478a, 5b8f | **yes** | 5b8f returned pp. 7/12; needed 5 |
+| t-037 | 2c3e, b1db | **yes** | b1db returned pp. 39/18; needed 19 |
+| t-038 | 5b8f, b1db | **yes** | b1db returned pp. 45/15; needed 12 |
+| t-031 | 5b8f, b1db | **no** | resolver narrowed to 5b8f alone |
+
+**Five of six now reach both documents.** The quota is working exactly as
+designed. The failure has *moved*: it is no longer "the second policy is absent
+from the results", it is "the second policy's correct page ranks below 3 **within
+its own document's** reranked list." Slot allocation cannot fix that, because the
+slots are already there and already filled — with the wrong pages from the right
+document.
+
+**So the real remaining lever is depth and ranking inside a document**, not
+across documents: `per_doc_depth` (10), `per_doc_top_k` (2), and the
+cross-encoder's ability to rank a waiting-period clause above neighbouring
+boilerplate in a near-duplicate policy. That is a different experiment from the
+one this change ran, and it is the one worth running if the project is ever
+resumed.
+
+**Why we are stopping here anyway.** The exit criterion for Phase 3's comparison
+route stays unmet at 0.250, and this is the second measured attempt at it. The
+honest position is that the project has demonstrated the technique end-to-end —
+stratified retrieval, measured, with the failure correctly localised — and that
+grinding a 12-item subset further is worth less than shipping Phase 5. Recorded
+as a negative result, not hidden. The blog post writes itself: *we assumed the
+comparison lost a document, we proved the quota fixed that, and the number did
+not move — because the assumption was one layer off.*
+
+**t-031 is the one genuine harm** and is recorded as such: the resolver narrowed
+a two-document comparison to one document, so scoping actively removed evidence.
+It fell into `insurer` or `plan` strength on a question that names one policy
+while implicitly comparing against another. A comparison-route rule — *never
+scope a comparison to fewer than 2 documents* — is the obvious guard and is left
+unbuilt with the rest of the future scope.
 
 # Phase 4.5 — Post-training
 ⏳ Not started, credit-gated.

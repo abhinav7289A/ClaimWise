@@ -68,6 +68,11 @@ from tqdm import tqdm
 from common.config import DEFAULT_CONFIG_PATH, cfg_get, load_config
 from phase1_rag.embed_index import collection_name_for
 from phase1_rag.rag_chain import build_search_filter, retrieve
+from phase2_advanced.document_resolver import (
+    documents_from_index,
+    resolve_documents,
+    scoped_filter,
+)
 from phase2_advanced.hybrid import BM25Index, build_bm25_index, hybrid_retrieve
 from phase2_advanced.parent_docs import ParentStore, load_parent_store
 from phase2_advanced.rerank import CrossEncoderReranker, build_reranker
@@ -297,6 +302,7 @@ def evaluate_item(
     bm25: BM25Index | None = None,
     parents: ParentStore | None = None,
     agent: Any = None,
+    documents: list[Any] | None = None,
 ) -> ItemResult:
     """Retrieve for one golden item and record where the correct page landed.
 
@@ -316,6 +322,9 @@ def evaluate_item(
         reranker: Optional cross-encoder applied after retrieval.
         bm25: Optional lexical index. When present, retrieval is dense + BM25
             fused by RRF instead of dense alone.
+        documents: The user's indexed documents. When supplied, the question is
+            resolved to a subset and the search is scoped to it (technique 5).
+            None keeps the unscoped behaviour every prior metric was measured on.
 
     Returns:
         The item's retrieval outcome.
@@ -351,6 +360,16 @@ def evaluate_item(
             settings=settings,
         )
     else:
+        # Technique 5. Resolving the question to a document subset before the
+        # search is the only change; when nothing resolves, `scoped` is None and
+        # this is byte-identical to the unscoped pipeline every prior number was
+        # measured on, which is what keeps the A/B attributable.
+        search_filter = build_search_filter(settings["user_id"])
+        if documents:
+            resolution = resolve_documents(item["question"], documents)
+            if resolution:
+                search_filter = scoped_filter(settings["user_id"], resolution.doc_ids)
+
         chunks = retrieve(
             client,
             collection_name=collection_name,
@@ -359,7 +378,7 @@ def evaluate_item(
             top_k=settings["retrieval_top_k"],
             query_prefix=settings["query_prefix"],
             normalize=settings["normalize"],
-            search_filter=build_search_filter(settings["user_id"]),
+            search_filter=search_filter,
         )
 
     # Rerank the CHILDREN, then expand the winners. The first version did the
@@ -754,8 +773,10 @@ def print_report(summary: dict[str, Any], k_values: list[int], baseline: dict[st
                 f"{', '.join(multi['partially_covered_at_5'])}"
             )
             print(
-                "  => a global top-5 cannot serve these. The retrieval node needs "
-                "per-document top-k on the comparison route."
+                "  => a global top-5 cannot serve these. Re-run with "
+                "--agent-retrieval --scope-documents, which fans out per resolved "
+                "document and reserves slots for each; if these ids survive that, "
+                "the pages are missing from the fetch, not from the cut."
             )
         else:
             print("  => a global top-5 covers every comparison task. One retrieval call suffices.")
@@ -877,6 +898,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--lexical-top-k", type=int, default=None, help="Override hybrid.lexical_top_k."
     )
     parser.add_argument("--rrf-k", type=int, default=None, help="Override hybrid.rrf_k.")
+    parser.add_argument(
+        "--scope-documents",
+        action="store_true",
+        help=(
+            "Technique 5: resolve each question to a document subset and scope "
+            "the search to it. Off by default so prior numbers reproduce exactly. "
+            "With --agent-retrieval this also feeds the resolved subset to the "
+            "comparison route's per-document fan-out, which is the only "
+            "configuration that can move multi-document coverage."
+        ),
+    )
     parser.add_argument("--tag", default="", help="Label recorded in the results file.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
     return parser
@@ -1012,30 +1044,49 @@ def _run_agent_retrieval(
     Returns:
         Process exit code.
     """
-    from phase3_agents.retrieval_node import build_resources
+    from phase3_agents.retrieval_node import build_resources, list_documents
 
-    resources = build_resources(config)
+    resources = build_resources(config, scope_documents=args.scope_documents)
     LOGGER.info(
         "AGENT RETRIEVAL: pipeline=%s collection=%s. Comparison tasks take the "
         "per-document path; everything else takes the global path.",
         resources.settings["pipeline"],
         resources.collection_name,
     )
+    if args.scope_documents:
+        LOGGER.info(
+            "Document scoping ON. Comparison fans out to the RESOLVED documents "
+            "instead of all of them (relevance floor stood down when 2+ are named); "
+            "other routes take retrieve_scoped instead of retrieve_global."
+        )
     # The node owns the user boundary at serving time, so the eval must use the
     # same one or every filtered search would return nothing.
     settings = {**settings, "user_id": resources.settings["default_user_id"]}
 
+    scope_mix: dict[str, int] = {}
     try:
         results = [
             evaluate_item(item, None, "", None, settings, agent=resources)  # type: ignore[arg-type]
             for item in tqdm(items, desc="Agent retrieval", unit="q")
         ]
+        if args.scope_documents:
+            # Recomputed rather than threaded back through `ItemResult`. The
+            # resolver is a pure function of (question, document list) and both
+            # are unchanged here, so this reports exactly what retrieval used
+            # while leaving the result schema — and every parser of it — alone.
+            corpus = list_documents(resources, settings["user_id"])
+            for item in items:
+                resolution = resolve_documents(item["question"], corpus)
+                key = f"{resolution.strength}{'/ambiguous' if resolution.ambiguous else ''}"
+                scope_mix[key] = scope_mix.get(key, 0) + 1
     finally:
         resources.close()
 
     summary = compute_metrics(results, settings["k_values"])
     summary.update(
         {
+            "scope_documents": bool(args.scope_documents),
+            "scope_resolution_mix": scope_mix or None,
             "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "tag": args.tag,
             "provisional": False,
@@ -1195,9 +1246,24 @@ def main(argv: list[str] | None = None) -> int:
         if not client.collection_exists(collection_name):
             LOGGER.error("Collection %s does not exist. Run embed_index first.", collection_name)
             return 1
+        documents = None
+        if args.scope_documents:
+            documents = documents_from_index(client, collection_name, settings["user_id"])
+            LOGGER.info(
+                "Document scoping ON — %d document(s) available to resolve against",
+                len(documents),
+            )
+            if len(documents) < 2:
+                LOGGER.warning(
+                    "Only %d document(s) indexed: every question resolves to it, so "
+                    "scoping cannot change any number here.",
+                    len(documents),
+                )
+
         results = [
             evaluate_item(
-                item, client, collection_name, embedder, settings, reranker, bm25, parents
+                item, client, collection_name, embedder, settings, reranker, bm25, parents,
+                documents=documents,
             )
             for item in tqdm(items, desc="Retrieving", unit="q")
         ]

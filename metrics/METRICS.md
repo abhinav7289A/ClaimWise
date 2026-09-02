@@ -485,6 +485,50 @@ Threshold ~0.20–0.25 recommended for Phase 3's confidence gate.
 `g-017`, `g-030`, `g-058`, `g-069`, `g-077` — missed by dense and by every
 hybrid configuration. The target set for technique 3.
 
+### 2.8 Document scoping on the agent retrieval path — 2026-09-02 (D-33)
+
+Commit: working tree at `5cc02b3`. Config: `pipeline=chunk_policy`,
+`per_doc_depth=10`, `per_doc_top_k=2`, `comparison_top_k=6`, `max_documents=4`,
+`document_relevance_floor=0.15` (stood down when 2+ documents resolve).
+Eval set: `data/eval/agent_tasks.jsonl`, 40 pos / 10 neg, **gold route labels,
+not the router**. Both runs through `phase3_agents.retrieval_node`. 0 LLM calls,
+local CPU, $0.
+
+Command:
+`python -m evals.retrieval_metrics --tasks --agent-retrieval [--scope-documents]`
+
+| Metric | scope OFF | scope ON | Δ |
+|---|---|---|---|
+| doc+page@3 | 0.525 | 0.550 | **+0.025** |
+| doc+page@5 | 0.600 | **0.650** | **+0.050** |
+| doc+page@10 | 0.625 | 0.650 | +0.025 |
+| all docs cov@5 (overall) | 0.475 | **0.500** | +0.025 |
+| MRR | 0.4175 | **0.4279** | +0.010 |
+| page recall@5 | 0.5375 | **0.5750** | +0.0375 |
+| complete misses | 15 | **14** | −1 |
+| latency p50 | 10,896.7 ms | **3,595.6 ms** | **−3.03x** |
+| latency p95 | 18,924.3 ms | **5,893.2 ms** | **−3.21x** |
+| comparison page hit@5 | 0.667 | **0.750** | +0.083 |
+| lookup page hit@5 | 0.571 | **0.643** | +0.072 |
+| calculation page hit@5 | 0.571 | 0.571 | +0.000 |
+| **multi-doc all-docs-cov@5** | **0.250** | **0.250** | **+0.000** |
+
+Resolution mix (50 tasks): `insurer` 13 · `plan` 8 · `policy_type` 7 ·
+`policy_type/ambiguous` 5 · `insurer/ambiguous` 1 · `none` 16.
+
+Calculation is byte-identical because those tasks never name a policy — the
+resolver correctly no-ops on all of them.
+
+**Verdict: adopted, target metric unmet.** The multi-document exit criterion
+stays at 0.250 and Phase 3's comparison route remains a FAIL. Per-item analysis
+shows the quota now reaches **both** required documents in 5 of the 6
+half-answered tasks — the remaining failure is the correct page ranking below 3
+*within its own document*, i.e. fetch depth, not slot allocation. Closed as
+future scope; see D-33.
+
+Result files: `evals/results/retrievalagent_20260902T181934Z_agent-scope-off.json`,
+`evals/results/retrievalagent_20260902T193229Z_agent-scope-on.json`.
+
 ---
 
 ## Modal credit ledger (Phases 4 / 4.5)

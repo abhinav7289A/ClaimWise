@@ -62,6 +62,7 @@ import argparse
 import logging
 import sys
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,7 @@ from sentence_transformers import SentenceTransformer
 from common.config import DEFAULT_CONFIG_PATH, cfg_get, load_config
 from phase1_rag.embed_index import collection_name_for
 from phase1_rag.rag_chain import RetrievedChunk, build_search_filter, retrieve
+from phase2_advanced.document_resolver import Resolution, resolve_documents, scoped_filter
 from phase2_advanced.parent_docs import ParentStore, load_parent_store
 from phase2_advanced.rerank import CrossEncoderReranker, build_reranker
 
@@ -116,6 +118,9 @@ class RetrievalResources:
             unanswerable questions, inside the range genuine ones occupy).
         parents: Parent store when the collection has a parent tier.
         settings: Resolved retrieval settings.
+        scope_documents: When True, each question is resolved to a document
+            subset (Phase 2 technique 5) before retrieval. Off by default so
+            every number recorded before 2026-09-01 reproduces byte-identically.
         document_cache: Per-user document lists, filled on first use.
     """
 
@@ -125,6 +130,7 @@ class RetrievalResources:
     reranker: CrossEncoderReranker
     parents: ParentStore | None
     settings: dict[str, Any]
+    scope_documents: bool = False
     document_cache: dict[str, list[DocumentRef]] = field(default_factory=dict)
 
     def close(self) -> None:
@@ -194,12 +200,14 @@ def resolve_settings(config: dict[str, Any], pipeline: str | None = None) -> dic
 def build_resources(
     config: dict[str, Any],
     pipeline: str | None = None,
+    scope_documents: bool = False,
 ) -> RetrievalResources:
     """Load the models, open the index, and check the collection exists.
 
     Args:
         config: Parsed `config.yaml`.
         pipeline: Override `retrieval_agent.pipeline`.
+        scope_documents: Enable question-to-document scoping (technique 5).
 
     Returns:
         Ready-to-use resources. The caller owns them and must call `.close()`.
@@ -239,6 +247,7 @@ def build_resources(
         reranker=reranker,
         parents=parents,
         settings=settings,
+        scope_documents=scope_documents,
     )
 
 
@@ -481,6 +490,111 @@ def retrieve_global(
     return chunks[:top_k]
 
 
+def resolve_scope(
+    resources: RetrievalResources,
+    question: str,
+    user_id: str,
+) -> Resolution | None:
+    """Resolve a question to a document subset, or None if scoping is off.
+
+    Thin wrapper so exactly one place decides whether scoping applies. Returns
+    None — not an empty `Resolution` — when the feature is disabled, so a caller
+    can tell "scoping is off" from "scoping ran and narrowed nothing"; the two
+    take the same retrieval path but must be logged differently.
+
+    Args:
+        resources: Loaded retrieval resources.
+        question: The user's question.
+        user_id: Owner whose documents are candidates.
+
+    Returns:
+        The resolution, or None when `resources.scope_documents` is False.
+    """
+    if not resources.scope_documents:
+        return None
+    resolution = resolve_documents(question, list_documents(resources, user_id))
+    LOGGER.info(
+        "Scope: %d document(s) via %s%s",
+        len(resolution.doc_ids),
+        resolution.strength,
+        " (ambiguous)" if resolution.ambiguous else "",
+    )
+    return resolution
+
+
+def retrieve_scoped(
+    resources: RetrievalResources,
+    question: str,
+    user_id: str,
+    doc_ids: Sequence[str],
+    insurer: str | None = None,
+    policy_type: str | None = None,
+    top_k: int | None = None,
+) -> list[RetrievedChunk]:
+    """`retrieve_global`, restricted to a resolved subset of documents.
+
+    Deliberately a separate function rather than a parameter on
+    `retrieve_global`. Every Phase 2 number was measured on that function, and a
+    new branch inside it would make "reproduces the recorded metric" depend on an
+    argument default — the kind of coupling that turns a regression into an
+    argument about which run was which. Stage order is copied verbatim from it
+    (rerank the pool, expand, then truncate) so the only difference between the
+    two is the filter.
+
+    Args:
+        resources: Loaded retrieval resources.
+        question: The user's question.
+        user_id: Security boundary. Still applied first — narrowing to a
+            document subset must never widen access.
+        doc_ids: Documents to search inside. Must be non-empty; callers with an
+            empty resolution should be calling `retrieve_global`.
+        insurer: Optional metadata filter.
+        policy_type: Optional metadata filter.
+        top_k: Chunks to return. Defaults to `rag.top_k`.
+
+    Returns:
+        Chunks best first, carrying cross-encoder scores.
+
+    Raises:
+        ValueError: If `doc_ids` is empty — silently searching everything would
+            report a scoped run's numbers under an unscoped pipeline.
+    """
+    if not doc_ids:
+        raise ValueError(
+            "retrieve_scoped called with no doc_ids. An empty resolution means "
+            "'search everything', which is retrieve_global — call that instead."
+        )
+
+    settings = resources.settings
+    top_k = top_k or settings["top_k"]
+
+    # Built here rather than by calling `scoped_filter`, which starts from a
+    # bare `build_search_filter(user_id)` and so cannot carry the insurer /
+    # policy_type conditions this path also honours. Same MatchAny clause, added
+    # on top of the full base filter instead of a partial one.
+    conditions = list(
+        build_search_filter(user_id, insurer=insurer, policy_type=policy_type).must or []
+    )
+    conditions.append(
+        models.FieldCondition(key="doc_id", match=models.MatchAny(any=list(doc_ids)))
+    )
+
+    chunks = retrieve(
+        resources.client,
+        collection_name=resources.collection_name,
+        embedder=resources.embedder,
+        question=question,
+        top_k=settings["candidate_depth"],
+        query_prefix=settings["query_prefix"],
+        normalize=settings["normalize"],
+        search_filter=models.Filter(must=conditions),
+    )
+    chunks = resources.reranker.rerank(question, chunks)
+    if resources.parents is not None:
+        chunks = resources.parents.expand(chunks)
+    return chunks[:top_k]
+
+
 def retrieve_per_document(
     resources: RetrievalResources,
     question: str,
@@ -488,6 +602,7 @@ def retrieve_per_document(
     insurer: str | None = None,
     policy_type: str | None = None,
     total_k: int | None = None,
+    doc_ids: Sequence[str] | None = None,
 ) -> list[RetrievedChunk]:
     """Retrieve inside every document separately, then merge with quotas.
 
@@ -497,6 +612,14 @@ def retrieve_per_document(
     pair independently, so scores are comparable across documents as long as
     every document was scored against the same question.
 
+    **`doc_ids` is the 2026-09-01 change.** Without it this fans out to every
+    document the user owns and then uses the relevance floor to *guess* which of
+    them the question was about. When the resolver has already read the answer
+    out of the question — "compare my Star plan against my SBI plan" names both
+    — that guess is strictly worse than the fact. Passing the resolved subset
+    replaces guessing with knowing, and shrinks the fan-out, so each surviving
+    document gets a larger share of `comparison_top_k`.
+
     Args:
         resources: Loaded retrieval resources.
         question: The user's question.
@@ -504,6 +627,8 @@ def retrieve_per_document(
         insurer: Optional metadata filter.
         policy_type: Optional metadata filter.
         total_k: Chunks to return. Defaults to `retrieval_agent.comparison_top_k`.
+        doc_ids: Restrict the fan-out to these documents. None (the default)
+            keeps the measured 2026-08-20 behaviour of comparing everything.
 
     Returns:
         Chunks best first, with each document guaranteed its quota.
@@ -516,6 +641,21 @@ def retrieve_per_document(
         documents = [doc for doc in documents if doc.policy_type == policy_type]
     if insurer:
         documents = [doc for doc in documents if doc.insurer == insurer]
+    if doc_ids:
+        wanted = set(doc_ids)
+        # Intersect rather than trust. A doc_id that is not in this user's list
+        # is either stale or someone else's; either way it must not become a
+        # search target, so the user's own list stays the authority.
+        scoped = [doc for doc in documents if doc.doc_id in wanted]
+        if scoped:
+            documents = scoped
+        else:
+            LOGGER.warning(
+                "Resolved doc_ids matched none of user %s's %d document(s) — "
+                "comparing all of them instead.",
+                user_id,
+                len(documents),
+            )
 
     if not documents:
         LOGGER.warning("No indexed documents for user %s — nothing to compare", user_id)
@@ -554,9 +694,17 @@ def retrieve_per_document(
     # Relevance floor BEFORE the quota, because the quota's cost is paid in
     # slots: an irrelevant document does not merely add noise, it evicts a
     # relevant document's next-best passage.
-    per_document, dropped = apply_relevance_floor(
-        per_document, settings["document_relevance_floor"]
-    )
+    #
+    # ...unless the caller named the documents. The floor exists to guess which
+    # of the user's policies a comparison is about; when the question said so
+    # outright, dropping one of the two named documents is not noise control, it
+    # is discarding half the comparison. Evidence: the floor was tuned on a
+    # question that fanned out to all four documents (config.yaml), a situation
+    # scoping removes rather than mitigates.
+    floor = settings["document_relevance_floor"]
+    if doc_ids and len(documents) > 1:
+        floor = 0.0
+    per_document, dropped = apply_relevance_floor(per_document, floor)
     if dropped:
         names = {doc.doc_id: doc.filename for doc in documents}
         LOGGER.info(
@@ -599,15 +747,32 @@ def retrieve_node(state: dict[str, Any], resources: RetrievalResources) -> dict[
     route = state.get("route", "lookup")
 
     started = time.perf_counter()
+    resolution = resolve_scope(resources, question, user_id)
+    scoped_ids = resolution.doc_ids if resolution else ()
+
     if route == "comparison":
+        # Scoping feeds the strata; it does not replace them. Even with a
+        # resolution the fan-out and the quota still run — the resolution only
+        # says *which* documents get a quota.
         chunks = retrieve_per_document(
             resources,
             question,
             user_id,
             insurer=state.get("insurer"),
             policy_type=state.get("policy_type"),
+            doc_ids=scoped_ids or None,
         )
         node_name = "retrieve_per_document"
+    elif scoped_ids:
+        chunks = retrieve_scoped(
+            resources,
+            question,
+            user_id,
+            scoped_ids,
+            insurer=state.get("insurer"),
+            policy_type=state.get("policy_type"),
+        )
+        node_name = "retrieve_scoped"
     else:
         chunks = retrieve_global(
             resources,
@@ -632,6 +797,29 @@ def retrieve_node(state: dict[str, Any], resources: RetrievalResources) -> dict[
         "retrieved": chunks,
         "trace": [*state.get("trace", []), node_name],
     }
+
+    # Recorded on the state so the eval and the served trace can report the
+    # resolution mix — how often scoping fired, and on what signal — without
+    # re-running the resolver and risking a different answer than the one the
+    # retrieval actually used.
+    if resolution is not None:
+        update["scope"] = {
+            "doc_ids": list(resolution.doc_ids),
+            "strength": resolution.strength,
+            "matched_on": list(resolution.matched_on),
+            "ambiguous": resolution.ambiguous,
+        }
+
+    # An ambiguous resolution means one signal matched several documents and the
+    # user probably meant exactly one. Retrieval widens rather than guesses, and
+    # says so, because a silently-widened search that lands on the wrong policy
+    # is the failure this whole layer exists to prevent.
+    if resolution is not None and resolution.ambiguous and route != "comparison":
+        update["assumptions"] = [
+            *state.get("assumptions", []),
+            f"Question matched {len(resolution.doc_ids)} of your documents "
+            f"({', '.join(resolution.matched_on)}); all of them were searched.",
+        ]
 
     # A comparison that reached one document is answerable only in part. Recorded
     # as an assumption rather than silently accepted, because the measured
@@ -791,6 +979,56 @@ def _self_test() -> list[tuple[str, bool, str]]:
     keys = sorted(condition.key for condition in scoped.must)
     check("document filter keeps the user boundary", keys, ["doc_id", "user_id"])
 
+    # --- 2026-09-01: scoping feeds the strata -------------------------------
+    # The multi-document filter must keep the boundary too, and must use MatchAny
+    # rather than one MatchValue per document — the latter is an AND, which
+    # matches nothing, and is the silent way this feature could return zero
+    # chunks and be read as "the documents have no relevant pages".
+    multi = scoped_filter("user-1", ["doc-a", "doc-b"])
+    check(
+        "scoped filter keeps the user boundary",
+        sorted(condition.key for condition in multi.must),
+        ["doc_id", "user_id"],
+    )
+    doc_condition = next(c for c in multi.must if c.key == "doc_id")
+    check(
+        "scoped filter matches ANY of the documents",
+        sorted(doc_condition.match.any),
+        ["doc-a", "doc-b"],
+    )
+
+    # `retrieve_scoped` must refuse an empty subset rather than quietly becoming
+    # `retrieve_global`. The whole A/B depends on knowing which one ran.
+    try:
+        retrieve_scoped(None, "q", "user-1", [])  # type: ignore[arg-type]
+        check("empty scope is refused, not widened", "no error", "ValueError")
+    except ValueError:
+        check("empty scope is refused, not widened", "ValueError", "ValueError")
+    except Exception as exc:  # noqa: BLE001 - any other error means the guard is not first
+        check("empty scope is refused, not widened", type(exc).__name__, "ValueError")
+
+    # The reason scoping should move multi-doc coverage: with four documents the
+    # quota gives each of them 6/4 slots and one loses its second page; with the
+    # question resolved to the two it named, each gets three.
+    four = {
+        "star": [_fake_chunk("star", page, score) for page, score in ((31, 0.91), (30, 0.60))],
+        "sbih": [_fake_chunk("sbih", page, score) for page, score in ((20, 0.55), (21, 0.30))],
+        "life": [_fake_chunk("life", 8, 0.50), _fake_chunk("life", 9, 0.45)],
+        "home": [_fake_chunk("home", 3, 0.48), _fake_chunk("home", 4, 0.44)],
+    }
+    unscoped_pages = {c.doc_id for c in select_per_document(four, per_doc_top_k=2, total_k=6)}
+    check(
+        "unscoped, the quota is spread across all four documents",
+        sorted(unscoped_pages),
+        ["home", "life", "sbih", "star"],
+    )
+    two = {doc_id: four[doc_id] for doc_id in ("star", "sbih")}
+    check(
+        "scoped, both named documents keep their pages",
+        sorted({(c.doc_id, c.page) for c in select_per_document(two, per_doc_top_k=2, total_k=6)}),
+        [("sbih", 20), ("sbih", 21), ("star", 30), ("star", 31)],
+    )
+
     return results
 
 
@@ -838,6 +1076,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Override retrieval_agent.per_doc_depth for one run.",
     )
+    parser.add_argument(
+        "--scope-documents",
+        action="store_true",
+        help="Resolve the question to a document subset before retrieving "
+        "(Phase 2 technique 5). Off by default so prior numbers reproduce.",
+    )
     parser.add_argument("--list-documents", action="store_true", help="List the user's documents.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
     return parser
@@ -873,7 +1117,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     config = load_config(args.config)
-    resources = build_resources(config, pipeline=args.pipeline)
+    resources = build_resources(
+        config, pipeline=args.pipeline, scope_documents=args.scope_documents
+    )
     user_id = args.user_id or resources.settings["default_user_id"]
     if args.per_doc_depth:
         resources.settings["per_doc_depth"] = args.per_doc_depth
@@ -899,6 +1145,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"\nquestion : {args.question}")
             print(f"route    : {args.route}  ->  {update['trace'][-1]}")
             print(f"pipeline : {resources.settings['pipeline']} / {resources.collection_name}")
+            if (scope := update.get("scope")) is not None:
+                print(
+                    f"scope    : {len(scope['doc_ids'])} doc(s) via {scope['strength']}"
+                    f"{' (ambiguous)' if scope['ambiguous'] else ''}"
+                    f"  {', '.join(scope['matched_on']) or '-'}"
+                )
             print(f"returned : {len(chunks)} chunk(s) from "
                   f"{len({c.doc_id for c in chunks})} document(s)\n")
             for rank, chunk in enumerate(chunks, start=1):
