@@ -441,6 +441,27 @@ generator:
       model: meta-llama/Llama-3.3-70B-Instruct
       usd_per_million_input: 0.0
       usd_per_million_output: 0.0
+    modal:
+      # Phase 5. THE fine-tuned model, served by deployment/modal_inference.py.
+      # This block is the entire Phase 5 model swap — the payoff for routing
+      # every LLM call through `common.generator` since Phase 1 (CLAUDE.md §8).
+      # No Python changed anywhere upstream to get here.
+      #
+      # base_url is per-workspace and changes between `modal serve` (ephemeral,
+      # `-dev` suffix) and `modal deploy` (persistent). Overridable so the two
+      # do not need a config edit to switch between:
+      #   $env:CLAIMWISE_MODAL_URL = "https://...modal.run/v1"
+      base_url: https://abhinavbhatia7289--claimwise-inference-server-api.modal.run/v1
+      base_url_env: CLAIMWISE_MODAL_URL
+      api_key_env: CLAIMWISE_API_KEY
+      model: AbhiCommits/claimwise-qwen35-4b
+      # Priced in GPU-seconds, not tokens, so the per-million columns cannot
+      # express it and are left at zero rather than filled with a fiction.
+      # The real cost model lives in `modal_inference.py::estimate` and the
+      # Modal ledger in METRICS.md. Measured 2026-09-03: 4.2-6.5s warm per
+      # query, ~71s first cold start (~55s of it the one-time weight download).
+      usd_per_million_input: 0.0
+      usd_per_million_output: 0.0
 
 judge:
   # The RAGAS judge. Configured separately from `generator` on purpose: the

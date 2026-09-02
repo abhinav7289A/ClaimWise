@@ -487,7 +487,7 @@ hybrid configuration. The target set for technique 3.
 
 ### 2.8 Document scoping on the agent retrieval path — 2026-09-02 (D-33)
 
-Commit: working tree at `5cc02b3`. Config: `pipeline=chunk_policy`,
+Commit: `ab8ad3f`. Config: `pipeline=chunk_policy`,
 `per_doc_depth=10`, `per_doc_top_k=2`, `comparison_top_k=6`, `max_documents=4`,
 `document_relevance_floor=0.15` (stood down when 2+ documents resolve).
 Eval set: `data/eval/agent_tasks.jsonl`, 40 pos / 10 neg, **gold route labels,
@@ -810,3 +810,117 @@ calculation slice was only 6% of training.
 | Cost comparison table recorded | **PARTIAL** — GPU costs are elapsed-time estimates; actuals pending from the Modal dashboard |
 | Modal spend tracked with remaining balance | **PARTIAL** — see the ledger caveat above |
 | 10-image vision sanity suite | **BLOCKED** — no images exist in `data/`. Training-side evidence (0 trainable vision params, hard-checked) proves the weights did not move, not that the image path still works end to end |
+
+---
+
+## Phase 5 — Deployment
+
+### 5.1 Modal inference endpoint — first light, 2026-09-03
+
+Commit: working tree at `ab8ad3f`. Serving `AbhiCommits/claimwise-qwen35-4b`
+(Phase 4 merged 16-bit) from `deployment/modal_inference.py` on Modal, L4,
+`min_containers=0`, `scaledown_window=120`. transformers + TextIteratorStreamer,
+**not** vLLM (CLAUDE.md §4). OpenAI-compatible, so the model swap cost **zero
+lines** of change upstream of `common/generator.py`.
+
+| Measure | Value |
+|---|---|
+| Model class resolved | `AutoModelForImageTextToText` (multimodal — vision tower present) |
+| First cold start | **71.4 s** (~55 s of it the one-time ~8 GB weight download) |
+| Warm latency, 20-token prompt | **6.50 s** (128 completion tokens) |
+| Warm latency, 388-token RAG prompt | **4.23 s** (36 completion tokens) |
+| Idle cost | $0.00 — scales to zero |
+| L4 rate | **UNVERIFIED** — still the assumed $0.80/hr; read off modal.com/pricing |
+
+Latency is dominated by tokens generated, not prompt length: the 388-token
+prompt was *faster* than the 20-token one because it produced 36 tokens instead
+of 128. Decode-bound, as expected for a 4B model on an L4.
+
+### 5.2 Grounded-answer check through the production prompt
+
+Two hand-built passages (pp. 31 and 32), the real `SYSTEM_PROMPT` from
+`phase1_rag/rag_chain.py` and the real `format_passages` header layout.
+
+Question: *"Is knee surgery covered after 18 months?"* against a passage stating
+a 24-month joint-replacement waiting period.
+
+> "No. Knee surgery is subject to a specific waiting period of 24months, so it
+> is not covered after 18 months [p.32]."
+
+Correct, correctly cited, no preamble, no chain-of-thought. **n=1 — this is a
+smoke test, not a metric.** The real generator comparison is
+`phase4_finetune/benchmark.py` over the golden set, and it has not been re-run
+against this endpoint.
+
+**Two serving defects found and fixed before this passed**, both in the harness
+rather than the model — the P-20/P-21 pattern for a third time:
+
+1. `from __future__ import annotations` plus a function-local `from fastapi
+   import Request` made FastAPI unable to resolve the annotation, so **every**
+   request returned `{"loc":["query","request"],"msg":"Field required"}`. Fixed
+   by importing fastapi at module level. `BUILD` is now reported by `/health` so
+   "my fix is wrong" is distinguishable from "the container is stale".
+2. Qwen3.5's chat template enables **thinking mode by default**, and the first
+   completion opened with *"Here's a thinking process that leads to the suggested
+   answer:"* — a train/serve mismatch, since the RAFT set contains no thinking
+   blocks. Fixed with `enable_thinking=False`, applied defensively.
+
+Also fixed: `finish_reason` was hardcoded to `"stop"` and reported a completion
+truncated at `max_tokens` as complete, which would have written truncated answers
+into METRICS as finished ones (§6).
+
+**A first wrong answer was the harness too.** An ad-hoc system prompt saying "if
+the answer is not in the context, say it is not covered" produced exactly that
+refusal. The production prompt's Rule 3 and Rule 4 exist to prevent it. No model
+conclusion should have been drawn from that run, and none was.
+
+### 5.3 Open items
+
+| Item | Status |
+|---|---|
+| Verified L4 $/hour | **OUTSTANDING** — every Modal cost figure in this file still rests on an assumed $0.80/hr |
+| Second cold start (Volume-cached) | **NOT MEASURED** — decides whether the 71.4 s is a one-off |
+| Reranker on free-Space CPU | **RISK** — p95 was 5.9 s locally on a faster CPU; the chosen topology gives it no GPU |
+| API key rotation before public launch | **OUTSTANDING** |
+
+### 5.4 The generator swap, end to end — 2026-09-03
+
+`python -m phase3_agents.graph --question "..." [--provider modal]`. Same
+question, same index, same router, same gate; only `generator.provider` differs.
+
+| | openrouter | modal |
+|---|---|---|
+| generator | `deepseek/deepseek-v4-flash-0731` | `AbhiCommits/claimwise-qwen35-4b` |
+| route | lookup (0.706, margin 0.078) | lookup (0.706, margin 0.078) — identical |
+| trace | router → retrieve_global → confidence_gate → generate | identical |
+| confidence | 0.8855 | 0.8855 — identical |
+| answer | the refusal sentence | the refusal sentence |
+| cited / invalid | [] / [] | [] / [] |
+
+**This is the Phase 5 model swap, and it cost zero lines upstream.** One
+`config.yaml` provider block plus a `--provider` flag; no change to the graph,
+the nodes, the prompt assembly or the citation verifier. The identical route,
+trace and confidence are the evidence that only the generator moved — everything
+computed before `generate` is byte-identical across the two runs.
+
+**Both refused, and both were RIGHT.** A false refusal was suspected and
+investigated; it was not one. `retrieval_node --question "knee joint replacement
+waiting period"` returns sum-insured limits (starhealth p.15, 0.7798), general
+surgery preconditions (sbigeneral p.21, 0.5875), prostate and gynaecological
+exclusions (starhealth p.32, 0.3733) and two "reasonable and customary charges"
+definitions. **The corpus contains no knee or joint-replacement waiting period.**
+Refusing was the correct behaviour from both generators.
+
+**The finding is in the gate, not the generators.** Rank-1 scored **0.7798** on a
+question the corpus cannot answer, and the gate passed it at confidence 0.8855.
+P-14 set the threshold at 0.20–0.25 from negatives scoring 0.0985; this clears it
+by a factor of three. The gate contributed nothing and the generator caught it.
+That is consistent with the caveat already recorded on the task set — 4 of 10
+negatives caught — and this is a concrete instance of the same weakness: a
+lexically plausible but semantically irrelevant passage scores high on the
+cross-encoder.
+
+**n=1. This is a smoke test, not a benchmark.** No quality claim is made about
+either generator from it. The generator comparison of record remains
+`phase4_finetune/benchmark.py` over the golden set, which has NOT been re-run
+against the Modal endpoint.

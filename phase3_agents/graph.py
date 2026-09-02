@@ -130,6 +130,7 @@ class GraphResources:
 def build_graph_resources(
     config: dict[str, Any],
     pipeline: str | None = None,
+    provider: str | None = None,
 ) -> GraphResources:
     """Load every node's dependencies once.
 
@@ -140,6 +141,13 @@ def build_graph_resources(
     Args:
         config: Parsed `config.yaml`.
         pipeline: Override `retrieval_agent.pipeline`.
+        provider: Override `generator.provider`. This is the Phase 5 model swap
+            (CLAUDE.md §3): passing "modal" points the generator slot at the
+            fine-tuned Qwen endpoint and changes nothing else in the graph.
+            Offered as an argument rather than a config edit because editing the
+            default would silently re-point every eval at a different model
+            mid-project — the exact confound that cost Phase 2 its judged
+            metrics.
 
     Returns:
         Ready-to-use resources. The caller owns them and must call `.close()`.
@@ -149,7 +157,7 @@ def build_graph_resources(
         retrieval=retrieval,
         router=build_router(config, retrieval.embedder),
         gate=build_gate(config),
-        generator=build_generator(config),
+        generator=build_generator(config, provider=provider),
         refusal_text=cfg_get(config, "rag.refusal_text", "Not covered in your documents."),
         top_k=cfg_get(config, "rag.top_k", 5),
     )
@@ -710,6 +718,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["chunk_policy", "parent_docs"],
         help="Override retrieval_agent.pipeline.",
     )
+    parser.add_argument(
+        "--provider",
+        default=None,
+        help="Override generator.provider, e.g. 'modal' for the fine-tuned "
+        "Qwen endpoint. The Phase 5 model swap, with no other change.",
+    )
     parser.add_argument("--user-id", default=None, help="Override index.default_user_id.")
     parser.add_argument("--verbose", action="store_true", help="Enable debug logging.")
     return parser
@@ -745,14 +759,17 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     config = load_config(args.config)
-    resources = build_graph_resources(config, pipeline=args.pipeline)
+    resources = build_graph_resources(
+        config, pipeline=args.pipeline, provider=args.provider
+    )
     try:
         compiled = build_graph(resources)
         final = run(args.question, resources, compiled, user_id=args.user_id)
     finally:
         resources.close()
 
-    print(f"\nquestion   : {final['question']}")
+    print(f"\ngenerator  : {resources.generator.provider} / {resources.generator.model}")
+    print(f"question   : {final['question']}")
     print(f"route      : {final.get('route')} — {final.get('route_reason', '')}")
     print(f"trace      : {' -> '.join(final.get('trace', []))}")
     print(f"confidence : {final.get('confidence')}")

@@ -300,6 +300,32 @@ def build_generator(
             f"Provider {provider_name!r} is not configured. Available: {available}"
         )
 
+    # A provider may nominate an env var that overrides its base_url. Added for
+    # the Modal endpoint, whose URL differs between `modal serve` (ephemeral,
+    # `-dev` suffixed) and `modal deploy` (persistent) and would otherwise need a
+    # config edit to switch between — a config edit that is easy to commit by
+    # accident and points the whole system at a dev endpoint that no longer
+    # exists. Providers without `base_url_env` are unaffected.
+    base_url = provider_config["base_url"]
+    base_url_env = provider_config.get("base_url_env")
+    if base_url_env and os.getenv(base_url_env):
+        base_url = os.environ[base_url_env]
+        LOGGER.info("%s base_url overridden by %s", provider_name, base_url_env)
+
+    # Modal prints two URLs and only one of them is callable: the dashboard
+    # (`modal.com/apps/<workspace>/...`) and the service (`*.modal.run`). Pasting
+    # the dashboard one yields `405 Method Not Allowed` from an HTML page, an
+    # error that says nothing about which URL is wrong and sends you looking at
+    # the server. Caught here, with the fix in the message, because the failure
+    # is otherwise indistinguishable from a broken endpoint.
+    if "modal.com/apps" in base_url:
+        raise RuntimeError(
+            f"{base_url_env or 'base_url'} points at the Modal DASHBOARD, not the "
+            f"service:\n  {base_url}\nThat page is HTML and returns 405 to a POST. "
+            "Use the URL ending in `.modal.run`, printed by `modal deploy` and "
+            "listed by `modal app list`, with `/v1` appended."
+        )
+
     key_env = provider_config["api_key_env"]
     api_key = os.getenv(key_env)
     if not api_key:
@@ -310,7 +336,7 @@ def build_generator(
 
     return OpenAICompatGenerator(
         provider=provider_name,
-        base_url=provider_config["base_url"],
+        base_url=base_url,
         api_key=api_key,
         model=model or provider_config["model"],
         temperature=cfg_get(config, "generator.temperature", 0.0),
